@@ -169,6 +169,7 @@
         "three": "0.186.1",
       },
       "devDependencies": {
+        "@nap/storage": "workspace:*",
         "@types/three": "^0.186.0",
       },
     },
