@@ -36,6 +36,10 @@ project checks, verification, and the resulting app. The [full session is on the
   The repair budget has a hard limit.
 - **Puts idle projects away.** nap stores the Git repository, destroys the idle sandbox, and restores
   the project when you return.
+- **Edits 3D scenes conversationally.** "Make the base 20% wider" becomes a validated patch the
+  agent proposes against the current revision: the 3D Model tab shows the result, every revision
+  lives in the same event log as the chat, and a rejected proposal changes nothing. See
+  [ADR-0015](docs/adr/0015-conversational-scene-edits-are-validated-patches-over-the-event-log.md).
 
 ## How a prompt becomes a verified project
 
@@ -161,11 +165,13 @@ repository's Vitest project configuration.
 
 | Path | Role |
 |---|---|
-| [`apps/web`](apps/web) | Next.js interface: chat, transcript, job history, and live preview |
+| [`apps/web`](apps/web) | Next.js interface: chat, transcript, job history, live preview, and a 3D Model tab |
 | [`apps/api`](apps/api) | Hono API, WebSocket streaming, authentication, admission, worker, and reaper processes |
 | [`apps/napbench`](apps/napbench) | CLI that runs NapBench against the agent and real or fake infrastructure |
 | [`packages/runtime`](packages/runtime) | Turn lifecycle, jobs, commits, verification, checkpoints, and continuation |
-| [`packages/agent`](packages/agent) | Model loop and the six sandbox-backed tools |
+| [`packages/agent`](packages/agent) | Model loop and the eight tools: six sandbox-backed, two for 3D scene proposals |
+| [`packages/scene-spec`](packages/scene-spec) | Versioned 3D scene schemas, validated patches, and the event-folded revision history |
+| [`packages/procedural`](packages/procedural) | Deterministic procedural geometry plus the Three.js adapter and GLB export |
 | [`packages/context`](packages/context) | Prompt assembly, token budgets, and truncation |
 | [`packages/sandbox`](packages/sandbox) | Sandbox, filesystem, command, and preview ports plus the E2B adapter |
 | [`packages/db`](packages/db) and [`packages/storage`](packages/storage) | Postgres event data and Git bundle snapshots in R2 |
@@ -202,6 +208,8 @@ NapBench, and the multi-process deployment are implemented. nap is still deliber
 - No Monaco editor or terminal in the web app.
 - User sandboxes still run through E2B rather than Kubernetes pods.
 - Long-term memory is an interface with a no-op implementation.
+- 3D scene edits travel one way for now: the agent proposes through chat while inspector edits stay
+  local, with no GPU path behind them.
 
 Those boundaries have extension points in the code. See the [full docs](https://nap-tawny.vercel.app/docs),
 [`docs/DEPLOY.md`](docs/DEPLOY.md), and [`docs/NAPBENCH.md`](docs/NAPBENCH.md) for operational and
