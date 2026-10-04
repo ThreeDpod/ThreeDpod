@@ -1,0 +1,34 @@
+{
+  "name": "@nap/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "dev": "next dev --port 3000",
+    "build": "next build",
+    "start": "next start --port 3000"
+  },
+  "dependencies": {
+    "@nap/procedural": "workspace:*",
+    "@nap/scene-spec": "workspace:*",
+    "@nap/shared": "workspace:*",
+    "@tailwindcss/postcss": "4.3.3",
+    "better-auth": "1.6.26",
+    "next": "16.3.0",
+    "prism-react-renderer": "^2.4.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "tailwindcss": "4.3.3",
+    "three": "0.186.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "7.0.0",
+    "@testing-library/react": "16.3.2",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "@types/three": "^0.186.0",
+    "jsdom": "30.0.1"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@nap/sandbox",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "template:build": "bun run scripts/build-template.ts"
+  },
+  "dependencies": {
+    "@nap/shared": "workspace:*",
+    "e2b": "2.38.0"
+  }
+}

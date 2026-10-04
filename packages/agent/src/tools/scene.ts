@@ -1,0 +1,73 @@
+/**
+ * Scene tools' shared logic: reading the folded head and applying proposals.
+ *
+ * Both tools answer from the same authority — the event log folded by
+ * `foldSceneSpec` — so `get_scene` can never describe a scene that
+ * `propose_scene_patch` would reject as stale, except across the one boundary
+ * that matters: appends still in flight. A turn's own accepted proposals land
+ * in the caller-owned overlay (`sceneState`) first and reach the store through
+ * the normal emit path, so a second proposal in the same turn validates against
+ * the first one's result rather than racing its append.
+ *
+ * Nothing here touches the store, the bus, or a `seq`. Reading history and
+ * emitting events are the caller's jobs (injected as `readSessionEvents` and
+ * `emit`); this module maps between the two and speaks only in validated
+ * results. An invalid stored event cannot corrupt the fold — triple
+ * verification runs at the boundary on every read, not just on write.
+ */
+
+import type { SceneHead } from "@nap/scene-spec/fold";
+import { validateProposal } from "@nap/scene-spec/proposal";
+import { readSceneHead } from "@nap/scene-spec/scene-events";
+import type { SceneSpec } from "@nap/scene-spec/schema";
+
+/** Re-exported so agent-side import sites keep one address for scene reads. */
+export { readSceneHead };
+
+/**
+ * The head as text the model can propose against: stable ids, full parameters
+ * (an edit needs the numbers it is changing), and the hash proposals must cite.
+ * Compact by construction — node lines, not pretty JSON — with the existing
+ * output cap as the backstop for scenes that outgrow a turn.
+ */
+export function summarizeScene(head: SceneHead): string {
+  const lines = head.spec.nodes.map((node) => {
+    if (node.kind === "group") {
+      return `- ${node.id}: group "${node.name}" children=[${node.children.join(", ")}]`;
+    }
+    return (
+      `- ${node.id}: ${node.op} "${node.name}" ` +
+      `params=${JSON.stringify(node.params)} material=${node.materialId} ` +
+      `@ [${node.transform.position.join(", ")}]`
+    );
+  });
+  return [`Scene ${head.hash.slice(0, 12)} (${head.spec.nodes.length} nodes):`, ...lines].join(
+    "\n",
+  );
+}
+
+export type ProposalApplication =
+  | { ok: true; spec: SceneSpec; specHash: string; parentHash: string | null; nodeCount: number }
+  | { ok: false; code: string; diagnostics: string };
+
+/**
+ * Validates a proposal against the given head through the canonical path.
+ * Returns data for the `scene.updated` event, or the rejection to record.
+ */
+export function applySceneProposal(head: SceneHead | null, proposal: unknown): ProposalApplication {
+  // No local null-head guard: validateProposal owns the empty-log branch, so a
+  // genesis proposal reaches the creation path instead of dying as no_base here.
+  const validated = validateProposal(proposal, head === null ? null : head.spec);
+  if (!validated.ok) {
+    return { ok: false, code: validated.error.code, diagnostics: validated.error.message };
+  }
+  return {
+    ok: true,
+    spec: validated.value.spec,
+    specHash: validated.value.specHash,
+    // Null for genesis: the fold starts a chain on a null parent, and a second
+    // null-parent entry later is skipped as a fork rather than a restart.
+    parentHash: head?.hash ?? null,
+    nodeCount: validated.value.spec.nodes.length,
+  };
+}
