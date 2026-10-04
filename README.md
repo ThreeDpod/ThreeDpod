@@ -1,12 +1,12 @@
-# nap
+# Threepod
 
 **Describe an app. Step away. Come back to a project with evidence behind it.**
 
-nap is an open-source AI app builder for software work that needs more than a model response. You
+Threepod is an open-source AI app builder for software work that needs more than a model response. You
 describe an app in chat. An agent writes it into an isolated sandbox, serves a live preview, commits
-the workspace, and runs the project's own checks before nap calls the work verified.
+the workspace, and runs the project's own checks before Threepod calls the work verified.
 
-Use nap as an app, a local runtime, or a reference implementation for long-running coding-agent
+Use Threepod as an app, a local runtime, or a reference implementation for long-running coding-agent
 systems.
 
 A model saying "done" is a claim. A passing checkpoint is evidence.
@@ -22,7 +22,7 @@ A model saying "done" is a claim. A passing checkpoint is evidence.
 The GIF is a 22-second cut from a real two-minute session. It shows the prompt, sandbox tool calls,
 project checks, verification, and the resulting app. The [full session is on the docs page](https://nap-tawny.vercel.app/docs).
 
-## What nap does
+## What Threepod does
 
 - **Builds in an isolated workspace.** The agent reads and edits files in an E2B sandbox. A Vite
   server exposes the project through a live preview while the turn runs.
@@ -31,10 +31,10 @@ project checks, verification, and the resulting app. The [full session is on the
 - **Streams from a durable event log.** Events are appended before they are published. A reconnect
   asks for everything after its last sequence number, so it can catch up without duplicates or gaps.
 - **Separates commits from checkpoints.** Every file-changing turn creates a commit. Only a commit
-  that passes the discovered checks becomes a checkpoint, which is nap's last known-good state.
+  that passes the discovered checks becomes a checkpoint, which is Threepod's last known-good state.
 - **Repairs bounded failures.** A failed check opens another turn with the failure in its context.
   The repair budget has a hard limit.
-- **Puts idle projects away.** nap stores the Git repository, destroys the idle sandbox, and restores
+- **Puts idle projects away.** Threepod stores the Git repository, destroys the idle sandbox, and restores
   the project when you return.
 - **Edits 3D scenes conversationally.** "Make the base 20% wider" becomes a validated patch the
   agent proposes against the current revision: the 3D Model tab shows the result, every revision
@@ -55,14 +55,14 @@ durable job → worker → agent in sandbox → commit
                        checkpoint    bounded repair turn
 ```
 
-The job and its transcript come from the same append-only event log. That gives nap one answer to
+The job and its transcript come from the same append-only event log. That gives Threepod one answer to
 what happened, what was verified, and where to continue. The full event model, job lifecycle, and
 verification rules are in the [technical docs](https://nap-tawny.vercel.app/docs#verification).
 
 ## Evidence, with scope
 
 These are historical measurements, not a promise about every deployment. The load test used fake
-model and sandbox providers, so it measured nap's queue, event log, workers, and WebSocket path. The
+model and sandbox providers, so it measured Threepod's queue, event log, workers, and WebSocket path. The
 real-model measurements tested the verification path and did not establish a model-score improvement.
 
 | Result | Measurement |
@@ -201,7 +201,7 @@ reverse.
 ## Current scope
 
 The durable job loop, worker queue, verification and repair, checkpoints, project continuation,
-NapBench, and the multi-process deployment are implemented. nap is still deliberately focused:
+NapBench, and the multi-process deployment are implemented. Threepod is still deliberately focused:
 
 - No multi-agent orchestration.
 - No built-in billing.
@@ -217,7 +217,7 @@ benchmark details.
 
 ## Read next
 
-- [How nap works](https://nap-tawny.vercel.app/docs) for the event model, jobs, verification, sandboxes, and scale.
+- [How Threepod works](https://nap-tawny.vercel.app/docs) for the event model, jobs, verification, sandboxes, and scale.
 - [`docs/NAPBENCH.md`](docs/NAPBENCH.md) for benchmark design, scoring, and task authoring.
 - [`docs/scaling-design.md`](docs/scaling-design.md) for queue semantics, leases, and load-test invariants.
 - [`docs/DEPLOY.md`](docs/DEPLOY.md) for deployment topology and environment variables.
