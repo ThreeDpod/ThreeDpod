@@ -20,10 +20,12 @@ describe("the closing band", () => {
     expect(screen.getAllByRole("link")).toHaveLength(2);
   });
 
-  it("does not repeat the pitch at somebody who has read the whole page", () => {
+  it("closes on starting with a description instead of a toolchain", () => {
     render(<ClosingCta />);
 
-    expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(/right then\.\s*nap\./i);
+    expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(
+      /start with a description\./i,
+    );
   });
 });
 
@@ -32,6 +34,12 @@ describe("the footer", () => {
     render(<SiteFooter />);
 
     expect(screen.getAllByRole("contentinfo")).toHaveLength(1);
+  });
+
+  it("says what Threepod is now, not what the old page pitched", () => {
+    render(<SiteFooter />);
+
+    expect(screen.getByText(/describe 3d scenes/i)).toBeInTheDocument();
   });
 
   it("offers the two places there are to go, rather than columns of pages that do not exist", () => {

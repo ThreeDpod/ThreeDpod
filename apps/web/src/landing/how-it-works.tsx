@@ -1,93 +1,70 @@
 "use client";
 
 /**
- * The three beats of a turn, and the turn itself playing beside them.
+ * How it works, in three short steps.
  *
- * The hero makes a claim — describe an app, go away, come back to it running — and this is the
- * section that has to make it credible. It used to do that with three still pictures, which is a
- * strange way to argue that something works while you are not watching. Now there is one stage
- * playing a whole turn on a loop, and the three beats light up as the act they describe comes
- * round: the copy says what is happening and the demo shows it, at the same moment.
- *
- * **One row, and nothing sticky.** Everything is in a single screen, so no scroll position has to
- * be reached before the section makes sense, and the page scrolls at the speed the reader is
- * scrolling it. Under `lg` the stage goes first and the beats read underneath — the picture is
- * what pulls somebody into a column of text on a phone.
- *
- * The lit beat arrives as a `data-beat` attribute the stage writes onto this section; the
- * stylesheet does the rest. That keeps a change of act to one attribute write instead of a React
- * render of the whole section, and — the part that matters — **with no script, or under reduced
- * motion, no attribute is ever written and every beat simply stays at full strength.**
+ * One quiet row under the hero: describe, validate, edit. The pipeline the
+ * README documents in full is compressed here to what fits on a doorway —
+ * the proposal model, the validation gate, and the editable result. No demo,
+ * no animation, nothing to press.
  */
 
-import { useRef } from "react";
-import { LiveStage } from "./demo/live-stage.tsx";
 import { SectionHeading } from "./section-heading.tsx";
 import { revealProps, useReveal } from "./use-reveal.ts";
 
-const BEATS = [
+const STEPS = [
   {
-    title: "Say it in one sentence",
-    body: "No stack to choose, no repo to clone, no template to pick. A sentence is the whole setup.",
+    title: "Describe",
+    body: "Say what you want in words. The agent proposes typed scene operations — never raw geometry.",
   },
   {
-    title: "Then nod off",
-    body: "It works in a sandbox of its own — reading, writing, running commands, fixing what it broke.",
+    title: "Validate",
+    body: "Schema, revision and size checks run first. A rejected proposal changes nothing.",
   },
   {
-    title: "Wake up to it running",
-    body: "The preview updates as it goes, so what you come back to is the app, not a diff to review.",
+    title: "Edit",
+    body: "Valid scenes build deterministically and stay open to your next sentence.",
   },
 ] as const;
 
 export function HowItWorks() {
-  // The section is what the stage writes the lit beat onto: it is the common ancestor of the
-  // demo and the copy, and an attribute here is the cheapest thing that can reach both.
-  const section = useRef<HTMLElement>(null);
   const { ref, state } = useReveal<HTMLDivElement>();
 
   return (
-    <section ref={section} aria-labelledby="how-it-works" className="px-6 py-24 sm:py-32">
+    <section
+      aria-labelledby="how-it-works"
+      className="border-[var(--s-border-1)] border-t px-6 py-20 sm:py-24"
+    >
       <div className="mx-auto max-w-5xl">
         <SectionHeading
           id="how-it-works"
-          lines={["You describe it. nap builds it.", "You wake up to it running."]}
-          emphasis="nap"
-          sub="One turn, start to finish. Everything below happens on a machine that is yours for the length of the project."
+          eyebrow="How it works"
+          lines={["Describe. Validate. Edit."]}
+          emphasis="Validate."
+          sub="A conversational construction layer: the model proposes, trusted code checks, the scene only moves on valid revisions."
         />
 
-        <div
-          ref={ref}
-          {...revealProps(state)}
-          className="nap-reveal mt-16 grid items-center gap-12 lg:mt-20 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1fr)] lg:gap-16"
-        >
-          <ol className="order-2 space-y-10 lg:order-1">
-            {BEATS.map((beat, index) => (
-              <li
-                key={beat.title}
-                data-beat-index={index + 1}
-                className="nap-beat text-[var(--s-text-muted)]"
-              >
-                <div className="flex items-center gap-3">
-                  <span className="font-mono text-[11px] text-[var(--s-text-subtle)] tabular-nums">
-                    {String(index + 1).padStart(2, "0")}
-                  </span>
-                  {/* The rule fills while this beat's act plays — a progress bar the length of the
-                      paragraph, and the only thing on the page that says how far through it is. */}
-                  <span className="nap-beat-rule relative block h-px w-10 bg-[var(--s-border-1)]" />
+        <div ref={ref} {...revealProps(state)} className="nap-reveal mt-12">
+          <ol className="grid gap-8 sm:grid-cols-3 sm:gap-6">
+            {STEPS.map((step, index) => (
+              <li key={step.title} className="flex gap-4">
+                <span
+                  aria-hidden="true"
+                  className="font-mono text-[11px] text-[var(--s-text-subtle)] tabular-nums"
+                >
+                  {String(index + 1).padStart(2, "0")}
+                </span>
+                <div>
+                  <h3 className="font-medium text-[var(--s-text-primary)] text-[16px] tracking-[-0.01em]">
+                    {step.title}
+                  </h3>
+                  <p className="mt-1.5 text-[14px] text-[var(--s-text-muted)] leading-relaxed">
+                    {step.body}
+                  </p>
                 </div>
-
-                <h3 className="nap-beat-title mt-4 font-medium text-[var(--s-text-primary)] text-lg tracking-[-0.01em]">
-                  {beat.title}
-                </h3>
-                <p className="mt-2 max-w-sm text-[15px] leading-relaxed">{beat.body}</p>
               </li>
             ))}
           </ol>
-
-          <div className="order-1 lg:order-2">
-            <LiveStage beatRef={section} />
-          </div>
         </div>
       </div>
     </section>

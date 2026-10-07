@@ -547,20 +547,69 @@ describe("executeTool — scene tools", () => {
     expect(result.output).toContain("base");
   });
 
+  it("get_scene exposes the full revision hash beside the short display hash", async () => {
+    const result = await executeTool(call("get_scene", {}), sceneContext());
+
+    expect(result.ok).toBe(true);
+    expect(result.output).toContain(GENESIS_HASH);
+  });
+
+  it("a proposal citing the hash get_scene returned validates and emits one update", async () => {
+    const ctx = sceneContext();
+    const read = await executeTool(call("get_scene", {}), ctx);
+
+    expect(read.ok).toBe(true);
+    const cited = /revision ([0-9a-f]{64})/.exec(read.output)?.[1];
+    expect(cited).toBe(GENESIS_HASH);
+
+    const result = await executeTool(
+      call("propose_scene_patch", {
+        baseHash: cited,
+        ops: [{ op: "set_param", nodeId: "base", key: "width", value: 2.2 }],
+        rationale: "Cite the displayed revision.",
+      }),
+      ctx,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(recorder.types).toEqual([
+      "tool.call",
+      "tool.result",
+      "tool.call",
+      "scene.updated",
+      "tool.result",
+    ]);
+    const [updated] = recorder.payloadsOf("scene.updated");
+    expect(updated).toMatchObject({ parentHash: GENESIS_HASH });
+  });
+
+  it("a proposal citing only the 12-character prefix is refused before validation", async () => {
+    const result = await executeTool(
+      call("propose_scene_patch", {
+        baseHash: GENESIS_HASH.slice(0, 12),
+        ops: [{ op: "set_param", nodeId: "base", key: "width", value: 2.2 }],
+        rationale: "Cite the short hash.",
+      }),
+      sceneContext(),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.output).toMatch(/Invalid arguments/);
+    expect(recorder.types).not.toContain("scene.updated");
+    expect(recorder.types).not.toContain("scene.rejected");
+  });
+
   it("get_scene reads only its own session", async () => {
     const seen: string[] = [];
     const ctx = sceneContext();
     const reader = ctx.readSessionEvents;
-    await executeTool(
-      call("get_scene", {}),
-      {
-        ...ctx,
-        readSessionEvents: async (sessionId: string) => {
-          seen.push(sessionId);
-          return reader === undefined ? [] : reader(sessionId);
-        },
+    await executeTool(call("get_scene", {}), {
+      ...ctx,
+      readSessionEvents: async (sessionId: string) => {
+        seen.push(sessionId);
+        return reader === undefined ? [] : reader(sessionId);
       },
-    );
+    });
 
     expect(seen).toEqual([SESSION_ID]);
   });

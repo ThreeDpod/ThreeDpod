@@ -18,6 +18,9 @@
     "@nap/agent": "workspace:*",
     "@nap/context": "workspace:*",
     "@nap/db": "workspace:*",
-    "@nap/runtime": "workspace:*"
+    "@nap/procedural": "workspace:*",
+    "@nap/runtime": "workspace:*",
+    "@nap/sandbox": "workspace:*",
+    "@nap/scene-spec": "workspace:*"
   }
 }

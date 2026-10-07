@@ -512,10 +512,10 @@ const FACE = {
  * light reads as a smudge rather than as a badge.
  */
 const STATIC = [
-  { text: "kerning", color: COLORS[0], left: 7, top: 22, rot: -4 },
-  { text: "baseline", color: COLORS[2], left: 74, top: 15, rot: 3 },
-  { text: "bezier", color: COLORS[4], left: 12, top: 78, rot: 5 },
-  { text: "gamut", color: COLORS[1], left: 78, top: 71, rot: -3 },
+  { text: "mesh", color: COLORS[0], left: 7, top: 22, rot: -4 },
+  { text: "topology", color: COLORS[2], left: 74, top: 15, rot: 3 },
+  { text: "spline", color: COLORS[4], left: 12, top: 78, rot: 5 },
+  { text: "boolean", color: COLORS[5], left: 78, top: 71, rot: -3 },
 ];
 
 /**
