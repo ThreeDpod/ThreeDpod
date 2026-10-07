@@ -326,7 +326,10 @@ async function getScene(ctx: ToolContext): Promise<ToolOutcome> {
   return { ok: true, output: summarizeScene(head) };
 }
 
-async function proposeScenePatch(proposal: AnySceneProposal, ctx: ToolContext): Promise<ToolOutcome> {
+async function proposeScenePatch(
+  proposal: AnySceneProposal,
+  ctx: ToolContext,
+): Promise<ToolOutcome> {
   const events = await readSceneLog(ctx);
   if (events === undefined) {
     return { ok: false, output: "Scene history is unavailable in this runtime." };
@@ -350,7 +353,8 @@ async function proposeScenePatch(proposal: AnySceneProposal, ctx: ToolContext): 
     ok: true,
     output:
       ("ops" in proposal ? `Applied ${proposal.ops.length} operation(s). ` : `Created scene. `) +
-      `Scene ${applied.specHash.slice(0, 12)} (${applied.nodeCount} nodes).`,
+      `Scene ${applied.specHash.slice(0, 12)} (${applied.nodeCount} nodes). ` +
+      `Cite revision ${applied.specHash} as baseHash for the next patch.`,
   };
 }
 

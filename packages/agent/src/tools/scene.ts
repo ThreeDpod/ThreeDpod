@@ -41,9 +41,14 @@ export function summarizeScene(head: SceneHead): string {
       `@ [${node.transform.position.join(", ")}]`
     );
   });
-  return [`Scene ${head.hash.slice(0, 12)} (${head.spec.nodes.length} nodes):`, ...lines].join(
-    "\n",
-  );
+  // The short hash is for humans scanning a transcript; the full revision
+  // hash is what a patch must cite as baseHash, so it travels in the output
+  // too — a model shown only the prefix cannot form a valid proposal.
+  return [
+    `Scene ${head.hash.slice(0, 12)} (${head.spec.nodes.length} nodes):`,
+    `revision ${head.hash}`,
+    ...lines,
+  ].join("\n");
 }
 
 export type ProposalApplication =

@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "@nap/context": "workspace:*",
+    "@nap/procedural": "workspace:*",
     "@nap/sandbox": "workspace:*"
   }
 }
