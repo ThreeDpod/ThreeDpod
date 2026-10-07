@@ -68,7 +68,7 @@ The following status reflects the latest project reports provided for this READM
 
 ### Known limitations
 
-- Creation-to-viewport is currently covered in two halves rather than one continuous run: `packages/procedural/src/scene-persistence.test.ts` round-trips persisted file-store data through reconstruction, procedural building, and the viewport-adapter boundary, while `packages/db/src/postgres-event-store.db.test.ts` covers Postgres genesis, validated edits, and rejections through the fold. A continuous Postgres-to-viewport test, WebSocket delivery integration, and real-model edit-quality evaluation remain unverified.
+- The complete creation-to-viewport workflow has not yet been exercised in one end-to-end test across the real persistence and delivery path.
 - Real-model scene creation and editing quality have not yet been evaluated.
 - Lease-loss and crash windows during scene-event emission remain unverified for scene-specific payloads.
 - Very large scene payloads and transport ceilings need explicit testing.
@@ -94,19 +94,6 @@ The next recommended milestone is **integrated reliability verification**.
 No software process can guarantee zero failures. Threepod follows a stability-first approach: small changes, reproducible checks, explicit failure reporting, and review before scope expansion.
 
 ## Contributing and verification
-
-### Quick start
-
-```bash
-bun install
-bun run test:fast   # unit, type, and web suites; needs no Docker and no credentials
-bun run dev         # web on :3000, API on :3001
-```
-
-Use `bun run test`, never `bun test`: `test` is a Bun built-in that shadows the
-repository's Vitest script and reports nonsense. These steps alone do not boot the
-full app — the API needs a database and credentials. See `docs/DEPLOY.md` for the
-complete local boot sequence.
 
 Use the repository's current instructions for setup and development commands. Before submitting a change:
 
