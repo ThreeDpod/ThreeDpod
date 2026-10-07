@@ -19,14 +19,14 @@ export function SiteFooter() {
         <div className="flex items-center gap-2">
           <NapMark className="size-8 text-[var(--s-text-primary)]" />
           <p className="text-[var(--s-text-muted)] text-sm">
-            <span className="font-semibold text-[var(--s-text-primary)]">nap</span> — describe an
-            app, don't watch it get built.
+            <span className="font-semibold text-[var(--s-text-primary)]">Threepod</span> — describe
+            3D scenes, build, edit, iterate.
           </p>
         </div>
 
         <div className="flex flex-col items-center gap-3 sm:flex-row sm:gap-6">
           <p className="text-[var(--s-text-subtle)] text-xs">
-            Built on E2B, OpenRouter, Bun and Postgres.
+            Built on Three.js, a deterministic procedural engine, and Postgres.
           </p>
           {/* One inline link, not a column. The argument above is against four headings over one
               link each — it is not against the second link this page has anywhere to send

@@ -1,12 +1,12 @@
 "use client";
 
 /**
- * The front page's frame: a thin bar, the hero, and the story under it.
+ * The front page's frame: a thin bar, the hero, and two short sections under it.
  *
- * The hero arrives as a slot so this can be mounted and asserted on without a router, a session
- * or a network — the same split the panes and the sign-in form already use. The sections below it
- * do not, because none of them asks the server anything: they are copy, and threading them
- * through a prop would be ceremony around three constants.
+ * Minimal on purpose — this page is a doorway, not a pitch deck. The hero
+ * states the product and shows the real viewport; one quiet row says how it
+ * works; the closing band offers the way in again. Nothing here asks the
+ * server anything, so the sections below the hero slot are constants, not props.
  *
  * **This page is for people who are not signed in.** Anybody with a session is sent to the
  * dashboard by `LiveLanding`, so there is no signed-in state to draw here.
@@ -17,14 +17,12 @@
  * slightly late control beats an early wrong one. The repository link does not wait: it is the
  * right answer either way.
  *
- * **The whole page is a light sheet now, not a lit stage on a dark page.** The hero keeps its own
- * gradient — it is a room with a light in it — and everything after it sits on the flat surface
- * that room stands on. The ink ramp is scoped to a class rather than declared at `:root`, so it
- * reaches this page and cannot restyle the dark workspace by accident.
+ * **The cream ramp is scoped to a class rather than declared at `:root`,** so it reaches this
+ * page and cannot restyle the dark workspace by accident. The 3D viewport keeps its own dark
+ * scene background — a lit model reads as lit only against a page that holds still.
  */
 
 import type { ReactNode } from "react";
-import { Capabilities } from "./capabilities.tsx";
 import { ClosingCta } from "./closing-cta.tsx";
 import { HowItWorks } from "./how-it-works.tsx";
 import { SiteFooter } from "./site-footer.tsx";
@@ -34,7 +32,7 @@ export type AuthState = "pending" | "signed-out";
 
 export function Landing({ auth, hero }: { auth: AuthState; hero: ReactNode }) {
   return (
-    <div className="ai-stage-ink relative flex min-h-dvh flex-col bg-[var(--s-surface-1)]">
+    <div className="ai-stage-ink threepod relative flex min-h-dvh flex-col bg-[var(--s-surface-1)]">
       {/*
         Drawn over the hero rather than above it, which is why the positioning is passed in here
         rather than living in the bar: the stage is meant to be the first thing on the page. It
@@ -57,7 +55,6 @@ export function Landing({ auth, hero }: { auth: AuthState; hero: ReactNode }) {
       <main className="flex flex-1 flex-col">
         {hero}
         <HowItWorks />
-        <Capabilities />
         <ClosingCta />
       </main>
 

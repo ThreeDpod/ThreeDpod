@@ -1986,3 +1986,51 @@ body {
 .nap-scroll-hidden::-webkit-scrollbar {
   display: none;
 }
+
+/*
+ * The Threepod landing theme: a warm sheet under dark viewports.
+ *
+ * Scoped to `.threepod` (which sits alongside `.ai-stage-ink` on the landing
+ * root) so the cream ramp and the orange accent reach this page and cannot
+ * restyle the dark workspace. Single-class specificity, declared after the
+ * `.ai-stage` block, so it wins ties without `!important`. The 3D canvases
+ * keep their own dark scene background — the model reads as lit only because
+ * the page around it holds still.
+ */
+.threepod {
+  --s-surface-1: #fffdf9;
+  --s-surface-2: #faf6ef;
+  --s-surface-3: #f2ecdf;
+  --s-border-1: #e2d9c8;
+  --s-text-primary: #1c1a17;
+  --s-text-body: #33302b;
+  --s-text-muted: #6b655b;
+  --s-text-subtle: #a39b8c;
+  /*
+   * The one accent, used sparingly: eyebrows, the primary CTA, the active
+   * revision dot and the final pipeline node. Restrained burnt orange —
+   * never a gradient wash, never glass.
+   */
+  --s-accent: #c2410c;
+  /* Validated revisions and passing checks. One step down from the accent. */
+  --s-ok: #2f7d4f;
+}
+
+/*
+ * The technical grid motif: hairline geometry at low opacity, fading with
+ * distance from the top so it reads as a drawing sheet rather than a table.
+ * Linear lines only — no radial glows, no color ramps.
+ */
+.threepod-grid {
+  background-image:
+    linear-gradient(to right, rgb(28 26 23 / 0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(28 26 23 / 0.05) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-position: top center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .threepod-grid {
+    background-image: none;
+  }
+}

@@ -1,49 +1,54 @@
 /**
  * The vocabulary and the colour of the badge trail.
  *
- * The words are all typography and drawing terms, which is not decoration: the trail sits on a
- * page about building interfaces, and a stream of *nouns from that trade* reads as the machine
- * thinking out loud rather than as lorem ipsum with a hue applied.
+ * The words are all 3D modelling terms, which is not decoration: the trail sits on a page about
+ * building scenes, and a stream of *nouns from that trade* reads as the machine thinking out
+ * loud rather than as lorem ipsum with a tint applied.
  *
- * Colour is a walk rather than a list. Picking at random from a fixed palette puts two greens
- * next to each other about as often as not, and a trail whose neighbours match reads as one
- * smeared shape; stepping a fixed distance around the wheel means consecutive badges can never
- * be the same colour. `COLORS` still exists because the static fallback has no walk to take —
- * it renders four badges once and wants four deliberately chosen, vivid ones.
+ * Colour is a walk rather than a list. Picking at random from a fixed palette puts two matching
+ * badges next to each other about as often as not, and a trail whose neighbours match reads as
+ * one smeared shape; stepping a fixed distance means consecutive badges can never be the same
+ * colour. `COLORS` still exists because the static fallback has no walk to take — it renders
+ * four badges once and wants four deliberately chosen, quiet ones.
+ *
+ * The whole ramp stays in warm paper tones — ambers, sands and one burnt orange — because the
+ * page is white and a rainbow trail would be the loudest thing on it. Depth comes from
+ * lightness, not hue: neighbours differ in how deep they are, never in what colour they are.
  */
 
 export const WORDS = [
-  "kerning",
-  "baseline",
-  "leading",
-  "tracking",
-  "x-height",
-  "ligature",
-  "serif",
-  "grotesk",
-  "bezier",
-  "raster",
-  "vector",
-  "stroke",
-  "gamut",
-  "bleed",
-  "weight",
-  "grid",
-  "hue",
-  "counter",
-  "ascender",
-  "hinting",
-  "widow",
-  "orphan",
-  "gutter",
-  "opacity",
+  "mesh",
+  "vertex",
+  "bevel",
+  "extrude",
+  "topology",
+  "spline",
+  "boolean",
+  "chamfer",
+  "normal",
+  "lathe",
+  "array",
+  "gizmo",
+  "viewport",
+  "wireframe",
+  "keyframe",
+  "shader",
+  "texture",
+  "polygon",
+  "subdivide",
+  "sculpt",
+  "retopo",
+  "nurbs",
+  "facet",
+  "loft",
 ] as const;
 
-export const COLORS = ["#c6ff3d", "#ff3d81", "#38e0ff", "#ff8a3d", "#b56bff", "#ffe234"] as const;
+export const COLORS = ["#ece3cd", "#e2d3b4", "#d5bf95", "#c6a878", "#a98f63", "#c2410c"] as const;
 
 /**
- * Far enough round the wheel that neighbours are plainly different hues, and coprime enough with
- * 360 that the walk takes fifteen steps to come back to where it started.
+ * Far enough round the warm band that neighbours are plainly different depths. The band itself
+ * is narrow on purpose — ambers only, never green or blue — so the walk reads as shades of one
+ * warm paper rather than as a tour of the wheel.
  */
 const HUE_STEP = 24;
 
@@ -70,16 +75,17 @@ function hslHex(h: number, s: number, l: number): string {
 
 /**
  * Returns the next colour in the walk. `intensity` is how fast the cursor was moving when the
- * badge dropped, and it drives saturation and lightness rather than hue: a slow drift lays down
- * pale badges, a flick lays down loud ones, so the trail records the gesture and not just the
- * path. Hue advances every call regardless, which is what keeps neighbours distinct.
+ * badge dropped, and it drives depth rather than hue: a slow drift lays down pale paper, a
+ * flick lays down a deep amber, so the trail records the gesture and not just the path. The hue
+ * advances every call regardless within a narrow warm band, which is what keeps neighbours
+ * distinct without ever leaving paper tones.
  */
 export function makeHueWalker(seedHue: number): (intensity: number) => string {
   let h = seedHue;
   return (intensity: number) => {
     h += HUE_STEP;
     const t = Math.max(0, Math.min(1, intensity));
-    return hslHex(h, 0.32 + 0.53 * t, 0.78 - 0.16 * t);
+    return hslHex(32 + (h % 36), 0.3 + 0.28 * t, 0.84 - 0.2 * t);
   };
 }
 

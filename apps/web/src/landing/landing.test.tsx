@@ -86,14 +86,14 @@ describe("the frame", () => {
   });
 
   it("carries the page's story under the hero, in order", () => {
-    // The hero is a slot and the sections are not: they ask the server nothing, so threading them
-    // through a prop would be ceremony around three constants. This is what says they are here.
+    // The hero is a slot and the sections are not: they ask the server nothing, so threading
+    // them through a prop would be ceremony around constants. This is what says they are here.
     show("signed-out");
     const sections = screen
       .getAllByRole("region")
       .map((region) => region.getAttribute("aria-labelledby"));
 
-    expect(sections).toEqual(["how-it-works", "capabilities", "closing"]);
+    expect(sections).toEqual(["how-it-works", "closing"]);
   });
 
   it("keeps the light ink ramp scoped to the page rather than the whole app", () => {
