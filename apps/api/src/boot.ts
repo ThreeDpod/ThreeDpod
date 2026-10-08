@@ -231,10 +231,14 @@ export async function bootNap(role: NapRole): Promise<NapProcess> {
    * to boot without whichever credentials the chosen route needs.
    */
   function buildProvider(): ClaudeProvider {
+    // Capped at 16k: OpenRouter admits a request against the whole max_tokens ceiling,
+    // so the 64k default reserves more than a low-balance key can afford and every turn
+    // fails before it starts. The harness proves 8k is plenty for real turns.
     if (env.NAP_PLATFORM === "openrouter") {
       return new ClaudeProvider({
         model: toOpenRouterModel(env.NAP_MODEL),
         effort: env.NAP_EFFORT,
+        maxTokens: 16_000,
         client: createOpenRouterClient(),
       });
     }
@@ -243,11 +247,12 @@ export async function bootNap(role: NapRole): Promise<NapProcess> {
       return new ClaudeProvider({
         model: toBedrockModel(env.NAP_MODEL),
         effort: env.NAP_EFFORT,
+        maxTokens: 16_000,
         client: createBedrockClient(),
       });
     }
 
-    return new ClaudeProvider({ model: env.NAP_MODEL, effort: env.NAP_EFFORT });
+    return new ClaudeProvider({ model: env.NAP_MODEL, effort: env.NAP_EFFORT, maxTokens: 16_000 });
   }
 
   /**

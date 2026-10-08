@@ -1,6 +1,6 @@
 # Memory — Threepod Phase 1 + local dev + UI consistency
 
-Last updated: 2026-10-04 (UTC). Branch `main` @ `9ca9cd5`. Work uncommitted.
+Last updated: 2026-10-08 (UTC). Branch `main` @ `9b630af`. Work uncommitted (`apps/api/src/boot.ts` only).
 
 ## What was built
 
@@ -13,6 +13,15 @@ Last updated: 2026-10-04 (UTC). Branch `main` @ `9ca9cd5`. Work uncommitted.
 - **`NAP_OBJECT_STORE=local` escape hatch** (no R2 account needed locally): `packages/storage/src/file-object-store.ts` + tests (traversal-safe, R2-identical error semantics); `env.ts` (`NAP_OBJECT_STORE: r2|local` default r2, `NAP_OBJECT_STORE_DIR` default `.nap-objects`, R2 keys required only on r2); `boot.ts` branch; `.env.example` docs; `.nap-objects/` added to `.gitignore`.
 - User confirmed the 3D Model tab renders live at `/p/[projectId]` (SSR contains `workbench-tab-model`; earlier "no visible difference" was navigation — tab lives only in project workspaces, behind sign-in).
 
+**Live verification, 2026-10-08 (Luna via OpenRouter, E2B, Neon):**
+- Model: `openai/gpt-5.6-luna` at `medium` effort, `NAP_PLATFORM=openrouter`. Debug on Luna, record on Opus.
+- `bun run harness --real "add a dark mode toggle"` green: 3 reads → 4 edits → `npm run build` passed in-sandbox, `turn.completed` 42k in / 2.2k out, verification passed, `job.completed verified`, commit `8923ee8`.
+- E2B template `nap-vite-react` was 404 under the user's new E2B key (templates are per-account); fixed with `bun run template:build` in `packages/sandbox`.
+- Postgres on Neon: `DATABASE_URL` (pooler) + `NAP_LISTEN_DATABASE_URL` (direct host, no `-pooler` — `LISTEN` fails over pooled connections). `bun run db:migrate` → "Migrations applied."
+- `bun run dev:worker` refused with `NAP_EVENT_BUS=in-process`; fixed with `NAP_EVENT_BUS=postgres` (separate API+worker needs Postgres fanout).
+- UI turn failed on OpenRouter reserving the full 64k `max_tokens` ceiling (key affords 29,350); fixed in `apps/api/src/boot.ts:233` — provider now sends `maxTokens: 16_000` on all three platform branches (harness already used 8k). Typecheck clean. **Uncommitted.**
+- User confirmed live UI 3D loop: stool generated from chat prompt in Model tab, then edited via chat — `scene.updated` → viewport both times.
+
 ## Decisions made
 
 - procedural core has zero three imports; adapter isolated in `three-adapter.ts`.
@@ -21,6 +30,7 @@ Last updated: 2026-10-04 (UTC). Branch `main` @ `9ca9cd5`. Work uncommitted.
 - `local` store is dev-only, never default; production keeps failing closed without R2. No `!` (explicit unreachable-throw in boot).
 - `ui-registry.md` is the UI consistency reference.
 - Repo-wide `bun run lint` red is pre-existing (CRLF checkout); only touched-file cleanliness enforced.
+- API `maxTokens` 16k (not 64k default): OpenRouter admits against the ceiling, so the default reserves more than a low-balance key holds. Harness stays at 8k.
 
 ## Problems solved
 
@@ -31,20 +41,24 @@ Last updated: 2026-10-04 (UTC). Branch `main` @ `9ca9cd5`. Work uncommitted.
 - Web test pool times out under parallel load → `--maxWorkers=1` for web runs.
 - `bun run db:migrate` failing despite `.env` set → empty `DATABASE_URL` persisted in Windows env shadows the file (loader: already-exported wins). Fix: remove persisted var or prefix the command.
 - Anonymous sign-in 500 `relation "users" does not exist` → dev DB never migrated; `bun run db:migrate` is the documented missing step (README order).
-- User pasted live E2B/OpenRouter/secret values into chat → told to rotate all of them.
+- User pasted live E2B/OpenRouter/secret + Neon values into chat → told to rotate all of them (2026-10-04 and again 2026-10-08).
+- No `docker` binary on this machine → `db` suite unrunnable; dev DB via Neon instead of compose.
 
 ## Current state
 
-- `typecheck` 16/16 green; Biome clean on all touched files; unit scope 209/209 (+96 storage/api incl. new suites); web viewport+workspace 41/41; arch guard 38/38.
-- Full `test:fast`: 4064 pass, 21 pre-existing Windows-env failures — none in new code. `db` suite unrunnable (no Docker daemon; later user started Postgres via compose).
-- User's local boot: E2B + OpenRouter keys set, `NAP_OBJECT_STORE=local`, `NAP_ALLOW_DEMO=true`; pending: rotated keys, Postgres up, `db:migrate`, `dev`/`dev:worker`/`dev:reaper`.
-- Everything uncommitted (8+ modified files, new dirs, `ui-registry.md`, this `memory.md`; `REPO_MAP.md` pre-existing untracked, not ours).
+- `typecheck` green on `apps/api` after `boot.ts` edit; full `test:fast` not re-run since.
+- Live stack: Neon migrated, `dev` + `dev:worker` up, Luna turns + 3D chat generation/edit verified in UI.
+- Tree: only `apps/api/src/boot.ts` modified. `apps/api/.env` (Neon, E2B, OpenRouter, generated secrets, `NAP_EVENT_BUS=postgres`) is gitignored by design.
+- Prior Phase-1 work described above is committed; `REPO_MAP.md` pre-existing untracked, not ours.
 
 ## Next session starts with
 
-Ask user whether local boot succeeded; if yes, smoke-test a turn. Otherwise: commit the work (all green), or continue to Phase 2 (constrained agent tools, conversational edits, persisted revisions, geometry verification). `git status` first; `test:fast` + `typecheck` after edits.
+- `git status` first; decide on committing `feat(api): cap provider maxTokens at 16k` (typecheck green, rationale in boot comment).
+- Re-run `test:fast` + `typecheck` after any further edits.
+- Then Phase 2 (constrained agent tools, conversational edits, persisted revisions, geometry verification) or production hardening.
 
 ## Open questions
 
-- Did the user rotate the exposed API keys? (Asked to, unconfirmed.)
+- Did the user rotate the exposed keys (E2B, OpenRouter, Neon, auth secrets)? (Asked twice, unconfirmed.)
 - Phase 2+ deferrals unchanged: backend authoritative build, Blender adapter, GPU inference + model benchmark, R3F.
+- Should `maxTokens` become `NAP_MAX_OUTPUT_TOKENS` env instead of hardcoded 16k? Deferred — hardcoded until a second value is needed.
