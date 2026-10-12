@@ -63,7 +63,8 @@ describe("foldSceneSpec", () => {
     expect(twice).toEqual(once);
   });
 
-  it("resolves conflicting branches by order: later wins, deterministically", () => {    const genesis = towerSpec();
+  it("resolves conflicting branches by order: later wins, deterministically", () => {
+    const genesis = towerSpec();
     const genesisHash = hashSceneSpec(genesis);
     const wide = widened();
     const renamed = applyPatch(
@@ -161,6 +162,27 @@ describe("foldSceneSpec", () => {
     // History is preserved: a later update can still build on the child.
     const continued = foldSceneSpec([...events, updated(child, childHash, "turn-4")]);
     expect(continued?.hash).toBe(childHash);
+  });
+
+  it("accepts a new edit parented on the reverted head", () => {
+    // A revert moves the head pointer without forking or tombstoning: the next
+    // edit builds on the revision the revert parked on, like any other head.
+    const genesis = towerSpec();
+    const genesisHash = hashSceneSpec(genesis);
+    const child = widened();
+    const events: SceneLogEvent[] = [
+      updated(genesis, null, "turn-1"),
+      updated(child, genesisHash, "turn-2"),
+      { type: "scene.reverted", toHash: genesisHash, turnId: "turn-3" },
+    ];
+    const narrowed = applyPatch(
+      genesis,
+      { baseRevision: genesisHash, ops: [{ op: "rename", nodeId: "base", name: "Plinth" }] },
+      genesisHash,
+    );
+    if (!narrowed.ok) throw new Error("fixture patch failed");
+    const head = foldSceneSpec([...events, updated(narrowed.value, genesisHash, "turn-4")]);
+    expect(head?.hash).toBe(hashSceneSpec(narrowed.value));
   });
 
   it("skips reverts to unknown hashes", () => {

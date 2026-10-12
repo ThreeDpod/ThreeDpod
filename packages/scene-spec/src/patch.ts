@@ -13,7 +13,15 @@
 
 import type { Result } from "@nap/shared/result";
 import { z } from "zod";
-import { MAX_PATCH_OPS } from "./limits.ts";
+import {
+  MAX_DIMENSION_M,
+  MAX_HEIGHT_SEGMENTS,
+  MAX_PATCH_OPS,
+  MAX_RADIAL_SEGMENTS,
+  MIN_DIMENSION_M,
+  MIN_HEIGHT_SEGMENTS,
+  MIN_RADIAL_SEGMENTS,
+} from "./limits.ts";
 import { NodeIdSchema, type SceneSpec, TransformSchema, validateSceneSpec } from "./schema.ts";
 
 export const SetParamOpSchema = z.strictObject({
@@ -77,6 +85,7 @@ export type PatchError = {
     | "not_procedural"
     | "unknown_param"
     | "invalid_value"
+    | "unknown_material"
     | "duplicate_node_id"
     | "cannot_remove_root"
     | "invalid_result";
@@ -122,8 +131,10 @@ export function applyPatch(
   const draft: SceneSpec = structuredClone(spec);
   const byId = new Map(draft.nodes.map((node) => [node.id, node]));
 
-  for (const op of patch.ops) {
-    const failure = applyOp(draft, byId, op);
+  for (let index = 0; index < patch.ops.length; index += 1) {
+    const op = patch.ops[index];
+    if (op === undefined) continue;
+    const failure = applyOp(draft, byId, op, index);
     if (failure !== undefined) return { ok: false, error: failure };
   }
 
@@ -144,54 +155,82 @@ function applyOp(
   draft: SceneSpec,
   byId: Map<string, SceneSpec["nodes"][number]>,
   op: PatchOp,
+  index: number,
 ): PatchError | undefined {
   switch (op.op) {
     case "set_param": {
       const node = byId.get(op.nodeId);
-      if (node === undefined) return unknownNode(op.nodeId);
+      if (node === undefined) return unknownNode(op.nodeId, index);
       if (node.kind !== "procedural") {
         return {
           code: "not_procedural",
-          message: `node "${op.nodeId}" has no editable parameters`,
+          message: `${where(index, op)} node "${op.nodeId}" has no editable parameters`,
         };
       }
       const editable = EDITABLE_PARAMS[node.op] ?? [];
       if (!editable.includes(op.key)) {
         return {
           code: "unknown_param",
-          message: `"${op.key}" is not an editable parameter of ${node.op}`,
+          message:
+            `${where(index, op)} "${op.key}" is not an editable parameter of ${node.op} ` +
+            `(editable: ${editable.join(", ")})`,
         };
       }
       if (!isFiniteNumber(op.value)) {
-        return { code: "invalid_value", message: `"${op.key}" must be a finite number` };
+        return {
+          code: "invalid_value",
+          message: `${where(index, op)} "${op.key}" must be a finite number, got ${op.value}`,
+        };
+      }
+      const paramError = checkParamValue(node.op, node.params, op.key, op.value);
+      if (paramError !== undefined) {
+        return {
+          code: "invalid_value",
+          message: `${where(index, op)} "${op.key}" on "${op.nodeId}": got ${op.value} — ${paramError}`,
+        };
       }
       (node.params as Record<string, unknown>)[op.key] = op.value;
       return undefined;
     }
     case "set_transform": {
       const node = byId.get(op.nodeId);
-      if (node === undefined) return unknownNode(op.nodeId);
+      if (node === undefined) return unknownNode(op.nodeId, index);
       node.transform = op.transform;
       return undefined;
     }
     case "set_material": {
       const node = byId.get(op.nodeId);
-      if (node === undefined) return unknownNode(op.nodeId);
+      if (node === undefined) return unknownNode(op.nodeId, index);
       if (node.kind !== "procedural") {
-        return { code: "not_procedural", message: `node "${op.nodeId}" carries no material` };
+        return {
+          code: "not_procedural",
+          message: `${where(index, op)} node "${op.nodeId}" carries no material`,
+        };
+      }
+      const available = draft.materials.map((material) => material.id);
+      if (!available.includes(op.materialId)) {
+        return {
+          code: "unknown_material",
+          message:
+            `${where(index, op)} unknown material "${op.materialId}"` +
+            (available.length > 0
+              ? ` (available: ${available.join(", ")})`
+              : " (the scene carries no materials)") +
+            ` — add the material to the scene first, or pick one it already carries`,
+        };
       }
       node.materialId = op.materialId;
       return undefined;
     }
     case "rename": {
       const node = byId.get(op.nodeId);
-      if (node === undefined) return unknownNode(op.nodeId);
+      if (node === undefined) return unknownNode(op.nodeId, index);
       node.name = op.name;
       return undefined;
     }
     case "remove_node": {
       const node = byId.get(op.nodeId);
-      if (node === undefined) return unknownNode(op.nodeId);
+      if (node === undefined) return unknownNode(op.nodeId, index);
       if (op.nodeId === draft.root) {
         return { code: "cannot_remove_root", message: "the root node cannot be removed" };
       }
@@ -259,8 +298,86 @@ function applyOp(
   }
 }
 
-function unknownNode(nodeId: string): PatchError {
-  return { code: "unknown_node", message: `node "${nodeId}" does not exist` };
+function unknownNode(nodeId: string, index: number): PatchError {
+  return { code: "unknown_node", message: `op ${index}: node "${nodeId}" does not exist` };
+}
+
+/**
+ * Where an operation sits in its patch, e.g. `op 2 (set_param)`.
+ *
+ * Every operation-level diagnostic starts with this so a rejected multi-op
+ * patch names the exact operation to fix rather than leaving the caller to
+ * count.
+ */
+function where(index: number, op: PatchOp): string {
+  return `op ${index} (${op.op})`;
+}
+
+/** Integer-only parameter bounds, from the same limits the schema enforces. */
+const INTEGER_PARAMS: Record<string, { min: number; max: number }> = {
+  radialSegments: { min: MIN_RADIAL_SEGMENTS, max: MAX_RADIAL_SEGMENTS },
+  heightSegments: { min: MIN_HEIGHT_SEGMENTS, max: MAX_HEIGHT_SEGMENTS },
+};
+
+/** Linear-dimension parameters, bounded by the schema's dimension range. */
+const DIMENSION_PARAMS: ReadonlySet<string> = new Set([
+  "width",
+  "height",
+  "depth",
+  "radiusTop",
+  "radiusBottom",
+]);
+
+/**
+ * Check one parameter value against the target operation's own constraints —
+ * the same bounds `schema.ts` enforces — so a bad value fails here with the
+ * parameter named instead of collapsing into a generic `invalid_result` after
+ * the whole patch applied. Returns the constraint description, or undefined
+ * when the value is acceptable.
+ *
+ * The bevel bound reads the node's live dimensions (with the new value merged
+ * in when the edit targets a dimension itself), matching the schema's "at most
+ * half the smallest dimension" rule for the state this operation produces.
+ * Cross-operation interactions (e.g. bevel now, shrink the box two ops later)
+ * still fall through to the final revalidation — atomicity is unchanged.
+ */
+function checkParamValue(
+  nodeOp: string,
+  params: Record<string, unknown>,
+  key: string,
+  value: number,
+): string | undefined {
+  const integer = INTEGER_PARAMS[key];
+  if (integer !== undefined) {
+    if (!Number.isInteger(value)) {
+      return `${key} must be an integer in [${integer.min}, ${integer.max}] — use ${Math.round(value)} or another whole number`;
+    }
+    if (value < integer.min || value > integer.max) {
+      return `${key} must be an integer in [${integer.min}, ${integer.max}]`;
+    }
+    return undefined;
+  }
+  if (DIMENSION_PARAMS.has(key)) {
+    if (value < MIN_DIMENSION_M || value > MAX_DIMENSION_M) {
+      return `${key} must be in [${MIN_DIMENSION_M}, ${MAX_DIMENSION_M}] meters`;
+    }
+    return undefined;
+  }
+  if (key === "bevel" && nodeOp === "box") {
+    if (value < 0 || value > MAX_DIMENSION_M) {
+      return `bevel must be in [0, ${MAX_DIMENSION_M}] meters`;
+    }
+    const dims = ["width", "height", "depth"].map((dim) => (dim === key ? value : params[dim]));
+    if (dims.every((dim) => typeof dim === "number" && Number.isFinite(dim))) {
+      const smallest = Math.min(...(dims as number[]));
+      const limit = smallest / 2;
+      if (value > limit) {
+        return `bevel must be at most half the smallest dimension (${limit} m for a smallest dimension of ${smallest} m)`;
+      }
+    }
+    return undefined;
+  }
+  return undefined;
 }
 
 function shortHash(hash: string): string {

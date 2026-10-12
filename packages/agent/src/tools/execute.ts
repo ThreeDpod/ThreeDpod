@@ -445,7 +445,7 @@ async function proposeDesk(args: ProposeDesk, ctx: ToolContext): Promise<ToolOut
   return reportAppliedProposal(
     ctx,
     applied,
-    `Applied ${replanned.value.ops.length} operation(s). `,
+    `Applied ${replanned.value.ops.length} operation(s) to ${replanned.value.touched.join(", ")}. `,
   );
 }
 
