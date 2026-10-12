@@ -98,12 +98,11 @@ describe("applyPatch", () => {
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      // Operation-level, not a generic invalid_result: the diagnostic names the
-      // operation, the parameter, the value, and the bound to fix.
+      // Operation-level, not a generic invalid_result.
       expect(result.error.code).toBe("invalid_value");
-      expect(result.error.message).toContain("op 0");
-      expect(result.error.message).toContain("bevel");
-      expect(result.error.message).toContain("5");
+      expect(result.error.opIndex).toBe(0);
+      expect(result.error.path).toBe("bevel");
+      expect(result.error.reason).toBe("constraint");
     }
   });
 
@@ -279,10 +278,9 @@ describe("applyPatch", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe("invalid_value");
-      expect(result.error.message).toContain("op 0");
-      expect(result.error.message).toContain("radialSegments");
-      expect(result.error.message).toContain("12.7");
-      expect(result.error.message).toContain("integer");
+      expect(result.error.opIndex).toBe(0);
+      expect(result.error.path).toBe("radialSegments");
+      expect(result.error.reason).toBe("not_integer");
     }
     expect(hashSceneSpec(spec)).toBe(before);
   });
@@ -290,7 +288,10 @@ describe("applyPatch", () => {
   it("rejects integer segment counts outside their bounds", () => {
     const spec = withCylinder(towerSpec());
     const before = hashSceneSpec(spec);
-    for (const value of [2, 129]) {
+    for (const [value, reason] of [
+      [2, "too_small"],
+      [129, "too_big"],
+    ] as const) {
       const result = applyPatch(
         spec,
         patchFor(before, [{ op: "set_param", nodeId: CYLINDER_ID, key: "radialSegments", value }]),
@@ -299,7 +300,9 @@ describe("applyPatch", () => {
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe("invalid_value");
-        expect(result.error.message).toContain("[3, 128]");
+        expect(result.error.opIndex).toBe(0);
+        expect(result.error.path).toBe("radialSegments");
+        expect(result.error.reason).toBe(reason);
       }
     }
     expect(hashSceneSpec(spec)).toBe(before);
@@ -308,7 +311,10 @@ describe("applyPatch", () => {
   it("rejects dimensions below the minimum and above the maximum", () => {
     const spec = towerSpec();
     const before = hashSceneSpec(spec);
-    for (const value of [0.0005, 101]) {
+    for (const [value, reason] of [
+      [0.0005, "too_small"],
+      [101, "too_big"],
+    ] as const) {
       const result = applyPatch(
         spec,
         patchFor(before, [{ op: "set_param", nodeId: TOWER_BASE_ID, key: "width", value }]),
@@ -317,11 +323,39 @@ describe("applyPatch", () => {
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe("invalid_value");
-        expect(result.error.message).toContain("width");
-        expect(result.error.message).toContain(String(value));
+        expect(result.error.opIndex).toBe(0);
+        expect(result.error.path).toBe("width");
+        expect(result.error.reason).toBe(reason);
       }
     }
     expect(hashSceneSpec(spec)).toBe(before);
+  });
+
+  it("rejects shrinking a dimension below twice the existing bevel in one op", () => {
+    const spec = towerSpec();
+    const beveled = applyPatch(
+      spec,
+      patchFor(hashSceneSpec(spec), [
+        { op: "set_param", nodeId: TOWER_BASE_ID, key: "bevel", value: 0.4 },
+      ]),
+      hashSceneSpec(spec),
+    );
+    if (!beveled.ok) throw new Error("fixture patch failed");
+    const before = hashSceneSpec(beveled.value);
+    // A single width edit that would leave bevel 0.4 above half of 0.2 fails
+    // at the failing op — never as a late generic invalid_result.
+    const result = applyPatch(
+      beveled.value,
+      patchFor(before, [{ op: "set_param", nodeId: TOWER_BASE_ID, key: "width", value: 0.2 }]),
+      before,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("invalid_value");
+      expect(result.error.opIndex).toBe(0);
+      expect(result.error.path).toBe("width");
+    }
+    expect(hashSceneSpec(beveled.value)).toBe(before);
   });
 
   it("rejects an unknown material identifier with the available materials named", () => {
@@ -335,8 +369,7 @@ describe("applyPatch", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe("unknown_material");
-      expect(result.error.message).toContain("op 0");
-      expect(result.error.message).toContain("brass");
+      expect(result.error.opIndex).toBe(0);
       expect(result.error.message).toContain(TOWER_MATERIAL_ID);
     }
     expect(hashSceneSpec(spec)).toBe(before);
@@ -353,9 +386,8 @@ describe("applyPatch", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe("unknown_param");
-      expect(result.error.message).toContain("op 0");
-      expect(result.error.message).toContain("radius");
-      expect(result.error.message).toContain("width");
+      expect(result.error.opIndex).toBe(0);
+      expect(result.error.path).toBe("radius");
     }
     expect(hashSceneSpec(spec)).toBe(before);
   });
@@ -375,8 +407,9 @@ describe("applyPatch", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe("invalid_value");
-      expect(result.error.message).toContain("op 2");
-      expect(result.error.message).toContain("heightSegments");
+      expect(result.error.opIndex).toBe(2);
+      expect(result.error.path).toBe("heightSegments");
+      expect(result.error.reason).toBe("too_small");
     }
     // Atomic: the two valid earlier operations leave no trace on the input.
     expect(hashSceneSpec(spec)).toBe(before);
@@ -384,6 +417,42 @@ describe("applyPatch", () => {
     if (base?.kind === "procedural" && base.op === "box") {
       expect(base.params.width).toBe(2);
     }
+  });
+
+  it("reports the operation index when removing the root in a later op", () => {
+    const spec = towerSpec();
+    const before = hashSceneSpec(spec);
+    const result = applyPatch(
+      spec,
+      patchFor(before, [
+        { op: "rename", nodeId: TOWER_MID_ID, name: "Middle band" },
+        { op: "remove_node", nodeId: TOWER_ROOT_ID },
+      ]),
+      before,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("cannot_remove_root");
+      expect(result.error.opIndex).toBe(1);
+    }
+    expect(hashSceneSpec(spec)).toBe(before);
+  });
+
+  it("leaves a failed patch input deeply equal to its snapshot", () => {
+    const spec = withCylinder(towerSpec());
+    const snapshot = structuredClone(spec);
+    const before = hashSceneSpec(spec);
+    const result = applyPatch(
+      spec,
+      patchFor(before, [
+        { op: "set_param", nodeId: TOWER_BASE_ID, key: "width", value: 2.4 },
+        { op: "set_param", nodeId: CYLINDER_ID, key: "radialSegments", value: 12.7 },
+      ]),
+      before,
+    );
+    expect(result.ok).toBe(false);
+    expect(spec).toEqual(snapshot);
+    expect(hashSceneSpec(spec)).toBe(before);
   });
 
   it("accepts valid boundary values", () => {
@@ -401,6 +470,15 @@ describe("applyPatch", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(hashSceneSpec(result.value)).not.toBe(before);
+    const upper = applyPatch(
+      result.value,
+      patchFor(hashSceneSpec(result.value), [
+        { op: "set_param", nodeId: CYLINDER_ID, key: "radialSegments", value: 128 },
+        { op: "set_param", nodeId: CYLINDER_ID, key: "heightSegments", value: 1 },
+      ]),
+      hashSceneSpec(result.value),
+    );
+    expect(upper.ok).toBe(true);
   });
 
   it("rejects a negative bevel at the operation level", () => {
@@ -414,7 +492,9 @@ describe("applyPatch", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe("invalid_value");
-      expect(result.error.message).toContain("bevel");
+      expect(result.error.opIndex).toBe(0);
+      expect(result.error.path).toBe("bevel");
+      expect(result.error.reason).toBe("too_small");
     }
     expect(hashSceneSpec(spec)).toBe(before);
   });

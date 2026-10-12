@@ -167,37 +167,142 @@ describe("replanDesk", () => {
     if (!missing.ok) expect(missing.error.message).toMatch(/oak/);
   });
 
+  it("names every touched part in the returned summary", () => {
+    const built = walnutDesk();
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    const replanned = replanDesk(specFromAssembly(built.value, "desk"), {
+      topWidth: 2.0,
+      legMaterial: { material: "walnut" },
+    });
+    expect(replanned.ok).toBe(true);
+    if (!replanned.ok) return;
+    // Before-to-after lines for what changed, plus the operation count line.
+    expect(replanned.value.summary).toContain("top width 1.6 m → 2 m");
+    expect(replanned.value.summary).toContain("leg material matte_black → walnut");
+    expect(replanned.value.summary.at(-1)).toMatch(/operation\(s\) across \d+ part\(s\)\./);
+    // The count line agrees with the actual ops.
+    const parts = new Set(
+      replanned.value.ops.filter((op) => "nodeId" in op).map((op) => op.nodeId),
+    );
+    expect(replanned.value.summary.at(-1)).toBe(
+      `${replanned.value.ops.length} operation(s) across ${parts.size} part(s).`,
+    );
+  });
+
   it("reports no changes and non-desk scenes plainly", () => {
     const built = walnutDesk();
     expect(built.ok).toBe(true);
     if (!built.ok) return;
     const spec = specFromAssembly(built.value, "desk");
-    expect(replanDesk(spec, {}).ok).toBe(false);
-    expect(replanDesk(towerSpec(), { topWidth: 2.0 }).ok).toBe(false);
+    const empty = replanDesk(spec, {});
+    expect(empty.ok).toBe(false);
+    if (!empty.ok) expect(empty.error.code).toBe("no_changes");
+    const tower = replanDesk(towerSpec(), { topWidth: 2.0 });
+    expect(tower.ok).toBe(false);
+    if (!tower.ok) expect(tower.error.code).toBe("not_a_desk");
   });
 
-  it("names every touched part in the returned summary", () => {
+  /**
+   * Every refusal below asserts the code, the offending part, and that the
+   * input scene is untouched — a refused replan must never half-derive.
+   */
+  function expectRefusal(
+    spec: SceneSpec,
+    changes: Parameters<typeof replanDesk>[1],
+    componentId: string,
+  ): void {
+    const snapshot = structuredClone(spec);
+    const replanned = replanDesk(spec, changes);
+    expect(replanned.ok).toBe(false);
+    if (!replanned.ok) {
+      expect(replanned.error.code).toBe("not_representable");
+      expect(replanned.error.componentId).toBe(componentId);
+    }
+    expect(spec).toEqual(snapshot);
+  }
+
+  function deskSpec(): SceneSpec {
     const built = walnutDesk();
-    expect(built.ok).toBe(true);
-    if (!built.ok) return;
-    const replanned = replanDesk(specFromAssembly(built.value, "desk"), { topWidth: 2.0 });
-    expect(replanned.ok).toBe(true);
-    if (!replanned.ok) return;
-    expect(replanned.value.touched).toContain("desk-top");
-    expect(replanned.value.touched).toContain("desk-leg-front-left");
-    expect(replanned.value.touched).toContain("desk-leg-front-left-foot");
-    expect(replanned.value.touched).toContain("desk-apron-front");
-    // One entry per part even when a part sees several operations.
-    expect(new Set(replanned.value.touched).size).toBe(replanned.value.touched.length);
+    if (!built.ok) throw new Error("fixture desk failed to build");
+    return specFromAssembly(built.value, "desk");
+  }
+
+  function boxPart(
+    spec: SceneSpec,
+    id: string,
+  ): SceneSpec["nodes"][number] & {
+    kind: "procedural";
+  } {
+    const node = spec.nodes.find((entry) => entry.id === id);
+    if (node?.kind !== "procedural" || node.op !== "box") {
+      throw new Error(`fixture lost its box part "${id}"`);
+    }
+    return node;
+  }
+
+  it("refuses an apron moved in Y", () => {
+    const spec = deskSpec();
+    const apron = boxPart(spec, "desk-apron-front");
+    apron.transform.position = [
+      apron.transform.position[0],
+      apron.transform.position[1] + 0.05,
+      apron.transform.position[2],
+    ];
+    expectRefusal(spec, { topWidth: 2.0 }, "desk-apron-front");
   });
 
-  it("refuses a desk top replaced by a non-procedural node", () => {
-    const built = walnutDesk();
-    expect(built.ok).toBe(true);
-    if (!built.ok) return;
-    const spec = specFromAssembly(built.value, "desk");
-    const top = spec.nodes.find((node) => node.id === "desk-top");
-    if (top === undefined) throw new Error("fixture lost its desk top");
+  it("refuses a foot moved in X", () => {
+    const spec = deskSpec();
+    const foot = boxPart(spec, "desk-leg-front-left-foot");
+    foot.transform.position = [
+      foot.transform.position[0] + 0.05,
+      foot.transform.position[1],
+      foot.transform.position[2],
+    ];
+    expectRefusal(spec, { topWidth: 2.0 }, "desk-leg-front-left-foot");
+  });
+
+  it("refuses a customized leg height", () => {
+    const spec = deskSpec();
+    const leg = boxPart(spec, "desk-leg-front-left");
+    if (!("height" in leg.params)) throw new Error("fixture leg lost its height");
+    leg.params.height += 0.1;
+    expectRefusal(spec, { topWidth: 2.0 }, "desk-leg-front-left");
+  });
+
+  it("refuses a leg with mirrored X sign", () => {
+    const spec = deskSpec();
+    const leg = boxPart(spec, "desk-leg-front-left");
+    leg.transform.position = [
+      -leg.transform.position[0],
+      leg.transform.position[1],
+      leg.transform.position[2],
+    ];
+    expectRefusal(spec, { topWidth: 2.0 }, "desk-leg-front-left");
+  });
+
+  it("refuses a scaled and rotated top", () => {
+    const spec = deskSpec();
+    const top = boxPart(spec, "desk-top");
+    top.transform.rotationEuler = [0, 0.5, 0];
+    top.transform.scale = [1.1, 1, 1];
+    expectRefusal(spec, { topWidth: 2.0 }, "desk-top");
+  });
+
+  it("refuses a leg Z offset differing from the X inset", () => {
+    const spec = deskSpec();
+    const leg = boxPart(spec, "desk-leg-front-left");
+    leg.transform.position = [
+      leg.transform.position[0],
+      leg.transform.position[1],
+      leg.transform.position[2] + 0.1,
+    ];
+    expectRefusal(spec, { topWidth: 2.0 }, "desk-leg-front-left");
+  });
+
+  it("refuses a part replaced by a group node", () => {
+    const spec = deskSpec();
     spec.nodes = spec.nodes.filter((node) => node.id !== "desk-top");
     spec.nodes.push({
       kind: "group",
@@ -210,81 +315,16 @@ describe("replanDesk", () => {
       },
       children: [],
     });
-    const replanned = replanDesk(spec, { topWidth: 2.0 });
-    expect(replanned.ok).toBe(false);
-    if (!replanned.ok) {
-      expect(replanned.error.code).toBe("not_a_desk");
-      expect(replanned.error.message).toContain("desk-top");
-    }
+    expectRefusal(spec, { topWidth: 2.0 }, "desk-top");
   });
 
   it("refuses a desk missing a foot instead of skipping it", () => {
-    const built = walnutDesk();
-    expect(built.ok).toBe(true);
-    if (!built.ok) return;
-    const spec = specFromAssembly(built.value, "desk");
+    const spec = deskSpec();
     spec.nodes = spec.nodes.filter((node) => node.id !== "desk-leg-front-left-foot");
     const root = spec.nodes.find((node) => node.id === "desk");
     if (root?.kind !== "group") throw new Error("fixture lost its root group");
     root.children = root.children.filter((id) => id !== "desk-leg-front-left-foot");
-    const replanned = replanDesk(spec, { topWidth: 2.0 });
-    expect(replanned.ok).toBe(false);
-    if (!replanned.ok) {
-      expect(replanned.error.code).toBe("not_a_desk");
-      expect(replanned.error.message).toContain("desk-leg-front-left-foot");
-    }
-  });
-
-  it("refuses a rotated top instead of misreading its height", () => {
-    const built = walnutDesk();
-    expect(built.ok).toBe(true);
-    if (!built.ok) return;
-    const spec = specFromAssembly(built.value, "desk");
-    const top = spec.nodes.find((node) => node.id === "desk-top");
-    if (top?.kind !== "procedural") throw new Error("fixture lost its desk top");
-    top.transform.rotationEuler = [0, 0.5, 0];
-    const replanned = replanDesk(spec, { topWidth: 2.0 });
-    expect(replanned.ok).toBe(false);
-    if (!replanned.ok) {
-      expect(replanned.error.code).toBe("not_a_desk");
-      expect(replanned.error.message).toContain("desk-top");
-    }
-  });
-
-  it("refuses a translated top instead of silently recentering it", () => {
-    const built = walnutDesk();
-    expect(built.ok).toBe(true);
-    if (!built.ok) return;
-    const spec = specFromAssembly(built.value, "desk");
-    const top = spec.nodes.find((node) => node.id === "desk-top");
-    if (top?.kind !== "procedural") throw new Error("fixture lost its desk top");
-    top.transform.position = [1, top.transform.position[1], top.transform.position[2]];
-    const replanned = replanDesk(spec, { topWidth: 2.0 });
-    expect(replanned.ok).toBe(false);
-    if (!replanned.ok) {
-      expect(replanned.error.code).toBe("not_a_desk");
-      expect(replanned.error.message).toContain("desk-top");
-    }
-  });
-
-  it("refuses asymmetric legs instead of rebuilding them symmetric", () => {
-    const built = walnutDesk();
-    expect(built.ok).toBe(true);
-    if (!built.ok) return;
-    const spec = specFromAssembly(built.value, "desk");
-    const leg = spec.nodes.find((node) => node.id === "desk-leg-front-left");
-    if (leg?.kind !== "procedural") throw new Error("fixture lost its leg");
-    leg.transform.position = [
-      leg.transform.position[0] + 0.2,
-      leg.transform.position[1],
-      leg.transform.position[2],
-    ];
-    const replanned = replanDesk(spec, { topWidth: 2.0 });
-    expect(replanned.ok).toBe(false);
-    if (!replanned.ok) {
-      expect(replanned.error.code).toBe("not_a_desk");
-      expect(replanned.error.message).toContain("symmetrically");
-    }
+    expectRefusal(spec, { topWidth: 2.0 }, "desk-leg-front-left-foot");
   });
 
   it("leaves the input scene untouched when replanning fails", () => {

@@ -19,7 +19,7 @@
  */
 
 import type { PatchOp } from "@nap/scene-spec/patch";
-import type { SceneMaterial, SceneSpec } from "@nap/scene-spec/schema";
+import type { SceneMaterial, SceneNode, SceneSpec } from "@nap/scene-spec/schema";
 import type { Result } from "@nap/shared/result";
 import type { Bounds } from "./build.ts";
 import {
@@ -83,7 +83,13 @@ export type DeskPlan = {
 };
 
 export type DeskPlanError = {
-  code: ComponentError["code"] | "invalid_plan" | "not_a_desk" | "unknown_material" | "no_changes";
+  code:
+    | ComponentError["code"]
+    | "invalid_plan"
+    | "not_a_desk"
+    | "not_representable"
+    | "unknown_material"
+    | "no_changes";
   message: string;
   field?: string;
   componentId?: string;
@@ -354,94 +360,90 @@ function closeEnough(first: number, second: number): boolean {
   return Math.abs(first - second) <= REPLAN_EPSILON;
 }
 
+const LEG_IDS = [
+  "desk-leg-front-left",
+  "desk-leg-front-right",
+  "desk-leg-back-left",
+  "desk-leg-back-right",
+] as const;
+const APRON_IDS = ["desk-apron-front", "desk-apron-back"] as const;
+
+type BoxLeaf = Extract<SceneNode, { kind: "procedural"; op: "box" }>;
+
+function notRepresentable(componentId: string, message: string): DeskPlanError {
+  return { code: "not_representable", message, componentId };
+}
+
 /**
- * Verify the live scene still matches what the planner builds: axis-aligned
- * parts at unit scale, a top centered on the origin in plan, and four legs
- * placed symmetrically with one shared inset.
- *
- * Each of these is load-bearing for the derivation below. The height is read
- * as top-center plus half thickness (true only for an unrotated top); the
- * inset is read from one leg's X offset (true only when all four legs agree
- * in X and Z); the diff rewrites whole transforms (which would reset any
- * hand-applied rotation or scale). A scene that fails any check is refused
- * with the offending part named instead of being quietly rebuilt wrong.
+ * Demand one live part as a procedural box. A missing core part means the
+ * scene is not a planner desk at all (`not_a_desk`); a present part of the
+ * wrong shape cannot be reproduced by the planner (`not_representable`).
  */
-function checkPlannerConformance(
-  byId: Map<string, SceneSpec["nodes"][number]>,
-  top: Extract<SceneSpec["nodes"][number], { kind: "procedural" }>,
-  legIds: readonly string[],
+function demandBox(byId: Map<string, SceneNode>, id: string): BoxLeaf | DeskPlanError {
+  const node = byId.get(id);
+  if (node === undefined) {
+    return { code: "not_a_desk", message: `scene is missing planner part "${id}"` };
+  }
+  if (node.kind !== "procedural" || node.op !== "box") {
+    return notRepresentable(id, `planner part "${id}" is not a procedural box`);
+  }
+  return node;
+}
+
+/**
+ * Compare one live node against the planner's derivation for it: dimensions,
+ * position, rotation, and scale must all agree within epsilon. Any divergence
+ * — a moved apron, a shifted foot, a customized leg, a mirrored or rotated
+ * part — means the scene no longer matches what the planner builds, and a
+ * replan would silently overwrite the customization.
+ */
+function comparePart(
+  live: SceneNode | undefined,
+  expected: ComponentSpec,
 ): DeskPlanError | undefined {
-  if (top.op !== "box") {
-    return { code: "not_a_desk", message: 'planner part "desk-top" is not a box' };
+  if (live === undefined) {
+    return notRepresentable(expected.id, `scene is missing planner part "${expected.id}"`);
   }
-  const notDesk = (message: string): DeskPlanError => ({ code: "not_a_desk", message });
-  const isIdentityRotation = (rotation: readonly number[]): boolean =>
-    rotation.length === 3 && rotation.every((angle) => Math.abs(angle) <= REPLAN_EPSILON);
-  const isUnitScale = (scale: readonly number[]): boolean =>
-    scale.length === 3 && scale.every((factor) => Math.abs(factor - 1) <= REPLAN_EPSILON);
-  const targetIds = [
-    "desk-top",
-    ...legIds,
-    ...legIds.map((id) => `${id}-foot`),
-    "desk-apron-front",
-    "desk-apron-back",
-  ];
-  for (const id of targetIds) {
-    const node = byId.get(id);
-    if (node?.kind !== "procedural" || node.op !== "box") {
-      return notDesk(`planner part "${id}" is missing or not a procedural box`);
-    }
-    if (!isIdentityRotation(node.transform.rotationEuler)) {
-      return notDesk(
-        `planner part "${id}" is rotated — the desk planner only edits axis-aligned desks`,
-      );
-    }
-    if (!isUnitScale(node.transform.scale)) {
-      return notDesk(
-        `planner part "${id}" is rescaled — the desk planner only edits unit-scale desks`,
+  if (live.kind !== "procedural" || live.op !== "box") {
+    return notRepresentable(expected.id, `planner part "${expected.id}" is not a procedural box`);
+  }
+  if (expected.op !== "box" || !("width" in expected.params)) {
+    return notRepresentable(expected.id, `planner part "${expected.id}" is not a box part`);
+  }
+  for (const key of ["width", "height", "depth"] as const) {
+    if (!closeEnough(live.params[key], expected.params[key])) {
+      return notRepresentable(
+        expected.id,
+        `planner part "${expected.id}" has ${key} ${live.params[key]} m, ` +
+          `but the planner layout needs ${expected.params[key]} m`,
       );
     }
   }
-  const [topX = Number.NaN, , topZ = Number.NaN] = top.transform.position;
-  if (Math.abs(topX) > REPLAN_EPSILON || Math.abs(topZ) > REPLAN_EPSILON) {
-    return notDesk('planner part "desk-top" is not centered — the desk planner centers every top');
+  const at = live.transform.position;
+  const want = expected.transform.position;
+  if (
+    !closeEnough(at[0], want[0]) ||
+    !closeEnough(at[1], want[1]) ||
+    !closeEnough(at[2], want[2])
+  ) {
+    return notRepresentable(
+      expected.id,
+      `planner part "${expected.id}" is at [${at.join(", ")}], ` +
+        `but the planner layout places it at [${want.join(", ")}]`,
+    );
   }
-  const legOffsets = legIds.map((id) => {
-    const node = byId.get(id);
-    if (node?.kind !== "procedural" || node.op !== "box") return null;
-    const [x = Number.NaN, , z = Number.NaN] = node.transform.position;
-    return {
-      id,
-      x: Math.abs(x),
-      z: Math.abs(z),
-      width: node.params.width,
-      depth: node.params.depth,
-    };
-  });
-  const first = legOffsets[0];
-  if (first === undefined || first === null) return notDesk("planner legs are missing");
-  for (const leg of legOffsets) {
-    if (
-      leg === null ||
-      !closeEnough(leg.x, first.x) ||
-      !closeEnough(leg.z, first.z) ||
-      !closeEnough(leg.width, first.width) ||
-      !closeEnough(leg.depth, first.depth)
-    ) {
-      return notDesk(
-        `desk legs are not placed symmetrically ("${first.id}" vs "${leg?.id ?? "?"}") — ` +
-          `the desk planner moves all four legs from one shared inset`,
-      );
-    }
+  const turned = live.transform.rotationEuler;
+  if (!turned.every((angle) => Math.abs(angle) <= REPLAN_EPSILON)) {
+    return notRepresentable(
+      expected.id,
+      `planner part "${expected.id}" is rotated — the desk planner only edits axis-aligned desks`,
+    );
   }
-  const insetX = top.params.width / 2 - first.x - first.width / 2;
-  const topHalfD = top.params.depth / 2;
-  const legDepth = first.depth;
-  const insetZ = topHalfD - first.z - legDepth / 2;
-  if (!closeEnough(insetX, insetZ)) {
-    return notDesk(
-      `desk insets disagree between axes (${insetX} m in X, ${insetZ} m in Z) — ` +
-        `the desk planner applies one shared inset`,
+  const scaled = live.transform.scale;
+  if (!scaled.every((factor) => Math.abs(factor - 1) <= REPLAN_EPSILON)) {
+    return notRepresentable(
+      expected.id,
+      `planner part "${expected.id}" is rescaled — the desk planner only edits unit-scale desks`,
     );
   }
   return undefined;
@@ -457,7 +459,7 @@ function checkPlannerConformance(
 export function replanDesk(
   spec: SceneSpec,
   changes: DeskChanges,
-): Result<{ ops: PatchOp[]; touched: string[] }, DeskPlanError> {
+): Result<{ ops: PatchOp[]; summary: string[] }, DeskPlanError> {
   if (typeof changes !== "object" || changes === null) {
     return { ok: false, error: invalidPlan("(changes)", "must be an object") };
   }
@@ -467,9 +469,8 @@ export function replanDesk(
       return { ok: false, error: invalidPlan(key, "unknown desk change") };
     }
   }
-  const byId = new Map(spec.nodes.map((node) => [node.id, node]));
-  const top = byId.get("desk-top");
-  if (top?.kind !== "procedural" || top.op !== "box") {
+  const byId = new Map<string, SceneNode>(spec.nodes.map((node) => [node.id, node]));
+  if (byId.get("desk-top") === undefined) {
     return {
       ok: false,
       error: {
@@ -478,34 +479,26 @@ export function replanDesk(
       },
     };
   }
-  const LEG_IDS = [
-    "desk-leg-front-left",
-    "desk-leg-front-right",
-    "desk-leg-back-left",
-    "desk-leg-back-right",
-  ] as const;
-  const APRON_IDS = ["desk-apron-front", "desk-apron-back"] as const;
-  for (const id of [...LEG_IDS, ...APRON_IDS]) {
-    const node = byId.get(id);
-    if (node?.kind !== "procedural" || node.op !== "box") {
-      return {
-        ok: false,
-        error: { code: "not_a_desk", message: `scene is missing planner part "${id}"` },
-      };
-    }
+  // The six core parts prove this is a planner desk; feet join the comparison
+  // below, where a missing foot is a representability failure, not an absence.
+  const parts = new Map<string, BoxLeaf>();
+  for (const id of ["desk-top", ...LEG_IDS, ...APRON_IDS]) {
+    const found = demandBox(byId, id);
+    if ("code" in found) return { ok: false, error: found };
+    parts.set(id, found);
   }
-  // Feet are planner parts too (`footedPost` builds post plus `${id}-foot`):
-  // a desk that lost one is no longer planner-coherent, and the diff below
-  // would otherwise skip the absence in silence.
-  for (const legId of LEG_IDS) {
-    const foot = byId.get(`${legId}-foot`);
-    if (foot?.kind !== "procedural" || foot.op !== "box") {
-      return {
-        ok: false,
-        error: { code: "not_a_desk", message: `scene is missing planner part "${legId}-foot"` },
-      };
+  // Narrowed up front by the loop above: no silent fallbacks below may
+  // substitute defaults for geometry the scene actually carries.
+  const need = (id: string): BoxLeaf => {
+    const found = parts.get(id);
+    if (found === undefined) {
+      throw new Error(`internal error: pre-check missed planner part "${id}"`);
     }
-  }
+    return found;
+  };
+  const top = need("desk-top");
+  const legNode = need("desk-leg-front-left");
+  const apronNode = need("desk-apron-front");
   const presentMaterials = new Map(spec.materials.map((material) => [material.id, material]));
   const pickMaterial = (
     change: DeskMaterialChoice | undefined,
@@ -558,54 +551,53 @@ export function replanDesk(
     ...TOP_MATERIALS,
   ]);
   if ("code" in topMaterial) return { ok: false, error: topMaterial };
-  const legNode = byId.get("desk-leg-front-left");
-  if (legNode?.kind !== "procedural") {
-    return {
-      ok: false,
-      error: { code: "not_a_desk", message: 'scene is missing planner part "desk-leg-front-left"' },
-    };
-  }
   const legMaterial = pickMaterial(changes.legMaterial, legNode.materialId, "legMaterial", [
     ...LEG_MATERIALS,
   ]);
   if ("code" in legMaterial) return { ok: false, error: legMaterial };
-  // Planner conformance: every part below is re-derived from dimensions, so a
-  // live part the derivation cannot reproduce — rotated, rescaled, translated
-  // off the planner grid, or asymmetric — would be silently clobbered by the
-  // diff. Refuse those scenes as non-planner desks with the part named.
-  const conformance = checkPlannerConformance(byId, top, LEG_IDS);
-  if (conformance !== undefined) return { ok: false, error: conformance };
-  const current = {
-    topWidth,
-    topDepth,
-    height,
+  // Live dimensions read straight from the proven box parts — no defaults, no
+  // guessing. The inset comes from one leg's X offset as a hypothesis; the
+  // derive-and-compare below is what proves X/Z agreement and leg symmetry.
+  const liveHeight = top.transform.position[1] + top.params.height / 2;
+  const live = {
+    topWidth: top.params.width,
+    topDepth: top.params.depth,
+    height: liveHeight,
     topThickness: top.params.height,
-    legWidth: 0.06,
-    legDepth: 0.06,
-    inset: 0,
-    apronHeight: 0.09,
-    apronThickness: 0.04,
+    legWidth: legNode.params.width,
+    legDepth: legNode.params.depth,
+    inset: Math.max(
+      0,
+      top.params.width / 2 - Math.abs(legNode.transform.position[0]) - legNode.params.width / 2,
+    ),
+    apronHeight: apronNode.params.height,
+    apronThickness: apronNode.params.depth,
     bevel: top.params.bevel ?? 0,
   };
-  // Leg footprint, inset, and apron size read back from the live parts: the
-  // plan that built this desk may have customized them, and the replan must
-  // preserve those choices rather than resetting them to defaults.
-  const sampleLeg = byId.get("desk-leg-front-left");
-  if (sampleLeg?.kind === "procedural" && sampleLeg.op === "box") {
-    current.legWidth = sampleLeg.params.width;
-    current.legDepth = sampleLeg.params.depth;
+  // Derive-and-compare: rebuild the planner layout from the live dimensions
+  // and require every derived part to match the live scene. A moved apron, a
+  // shifted foot, a customized leg, a mirrored or rotated part — anything the
+  // planner would silently overwrite — fails here with the part named.
+  let reference: ComponentSpec[];
+  try {
+    reference = deriveDeskParts({ ...live }, { top: topMaterial, legs: legMaterial });
+  } catch (error) {
+    return {
+      ok: false,
+      error: notRepresentable(
+        "desk-top",
+        `live dimensions do not form a planner layout (${error instanceof Error ? error.message : String(error)})`,
+      ),
+    };
   }
-  const sampleApron = byId.get("desk-apron-front");
-  if (sampleApron?.kind === "procedural" && sampleApron.op === "box") {
-    current.apronHeight = sampleApron.params.height;
-    current.apronThickness = sampleApron.params.depth;
+  for (const part of reference) {
+    const mismatch = comparePart(byId.get(part.id), part);
+    if (mismatch !== undefined) return { ok: false, error: mismatch };
   }
-  const topHalfW = top.params.width / 2;
-  const sampleLegX =
-    sampleLeg?.kind === "procedural" && sampleLeg.op === "box"
-      ? Math.abs(sampleLeg.transform.position[0])
-      : topHalfW;
-  current.inset = Math.max(0, topHalfW - sampleLegX - current.legWidth / 2);
+  // Target dimensions: the requested changes merged over the live ones, so
+  // untouched values — including customized leg and apron sizes — flow through
+  // verbatim rather than resetting to defaults.
+  const current = { ...live, topWidth, topDepth, height };
   let target: ComponentSpec[];
   try {
     target = deriveDeskParts({ ...current }, { top: topMaterial, legs: legMaterial });
@@ -616,48 +608,41 @@ export function replanDesk(
     };
   }
   const ops: PatchOp[] = [];
-  const touched: string[] = [];
   for (const part of target) {
     const node = byId.get(part.id);
-    // Unreachable for planner-coherent scenes (the checks above require every
-    // derived part), but a missing or replaced part must fail loudly rather
-    // than vanish from the diff.
+    // Unreachable for planner-coherent scenes (the comparison above requires
+    // every derived part), but a missing or replaced part must fail loudly
+    // rather than vanish from the diff.
     if (node === undefined) {
       return {
         ok: false,
-        error: { code: "not_a_desk", message: `scene is missing planner part "${part.id}"` },
+        error: notRepresentable(part.id, `scene is missing planner part "${part.id}"`),
       };
     }
-    if (node.kind !== "procedural") {
+    if (node.kind !== "procedural" || node.op !== "box") {
       return {
         ok: false,
-        error: {
-          code: "not_a_desk",
-          message: `planner part "${part.id}" is not a procedural node`,
-        },
+        error: notRepresentable(part.id, `planner part "${part.id}" is not a procedural box`),
       };
     }
     if (part.op === "box" && node.op === "box" && "width" in part.params) {
       for (const key of ["width", "height", "depth"] as const) {
         if (!closeEnough(node.params[key], part.params[key])) {
           ops.push({ op: "set_param", nodeId: part.id, key, value: part.params[key] });
-          touched.push(part.id);
         }
       }
-      const live = node.transform.position;
+      const at = node.transform.position;
       const next = part.transform.position;
       if (
-        !closeEnough(live[0], next[0]) ||
-        !closeEnough(live[1], next[1]) ||
-        !closeEnough(live[2], next[2])
+        !closeEnough(at[0], next[0]) ||
+        !closeEnough(at[1], next[1]) ||
+        !closeEnough(at[2], next[2])
       ) {
         ops.push({ op: "set_transform", nodeId: part.id, transform: part.transform });
-        touched.push(part.id);
       }
     }
     if (node.materialId !== part.material.id) {
       ops.push({ op: "set_material", nodeId: part.id, materialId: part.material.id });
-      touched.push(part.id);
     }
   }
   if (ops.length === 0) {
@@ -666,5 +651,51 @@ export function replanDesk(
       error: { code: "no_changes", message: "the requested changes move nothing" },
     };
   }
-  return { ok: true, value: { ops, touched: [...new Set(touched)] } };
+  return {
+    ok: true,
+    value: {
+      ops,
+      summary: describeReplan(live, current, top, legNode, topMaterial, legMaterial, ops),
+    },
+  };
+}
+
+/**
+ * Before-to-after lines for what the edit changed, plus an operation count.
+ * Dimensions and materials compare live values against the merged request, so
+ * the summary reports intent (what the user asked to change) rather than
+ * re-listing every dependent the diff moved.
+ */
+function describeReplan(
+  live: {
+    topWidth: number;
+    topDepth: number;
+    height: number;
+  },
+  merged: { topWidth: number; topDepth: number; height: number },
+  top: BoxLeaf,
+  legNode: BoxLeaf,
+  topMaterial: SceneMaterial,
+  legMaterial: SceneMaterial,
+  ops: PatchOp[],
+): string[] {
+  const lines: string[] = [];
+  const dimension = (label: string, before: number, after: number): void => {
+    if (!closeEnough(before, after)) lines.push(`${label} ${before} m → ${after} m`);
+  };
+  dimension("top width", live.topWidth, merged.topWidth);
+  dimension("top depth", live.topDepth, merged.topDepth);
+  dimension("height", live.height, merged.height);
+  if (top.materialId !== topMaterial.id) {
+    lines.push(`top material ${top.materialId} → ${topMaterial.id}`);
+  }
+  if (legNode.materialId !== legMaterial.id) {
+    lines.push(`leg material ${legNode.materialId} → ${legMaterial.id}`);
+  }
+  const parts = new Set<string>();
+  for (const op of ops) {
+    if ("nodeId" in op) parts.add(op.nodeId);
+  }
+  lines.push(`${ops.length} operation(s) across ${parts.size} part(s).`);
+  return lines;
 }

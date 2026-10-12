@@ -13,16 +13,15 @@
 
 import type { Result } from "@nap/shared/result";
 import { z } from "zod";
+import { MAX_PATCH_OPS } from "./limits.ts";
 import {
-  MAX_DIMENSION_M,
-  MAX_HEIGHT_SEGMENTS,
-  MAX_PATCH_OPS,
-  MAX_RADIAL_SEGMENTS,
-  MIN_DIMENSION_M,
-  MIN_HEIGHT_SEGMENTS,
-  MIN_RADIAL_SEGMENTS,
-} from "./limits.ts";
-import { NodeIdSchema, type SceneSpec, TransformSchema, validateSceneSpec } from "./schema.ts";
+  BoxParamsSchema,
+  CylinderParamsSchema,
+  NodeIdSchema,
+  type SceneSpec,
+  TransformSchema,
+  validateSceneSpec,
+} from "./schema.ts";
 
 export const SetParamOpSchema = z.strictObject({
   op: z.literal("set_param"),
@@ -76,6 +75,9 @@ export const ScenePatchSchema = z.strictObject({
 });
 export type ScenePatch = z.infer<typeof ScenePatchSchema>;
 
+/** Machine-readable reason for an `invalid_value` failure. */
+export type PatchErrorReason = "not_integer" | "too_small" | "too_big" | "constraint";
+
 export type PatchError = {
   code:
     | "invalid_patch"
@@ -90,6 +92,12 @@ export type PatchError = {
     | "cannot_remove_root"
     | "invalid_result";
   message: string;
+  /** Index of the failing operation in the patch. Absent only for whole-patch errors. */
+  opIndex?: number | undefined;
+  /** The failing parameter or node reference, e.g. `"width"` or `"desk-top"`. */
+  path?: string | undefined;
+  /** Why the value was rejected. Set for `invalid_value` failures. */
+  reason?: PatchErrorReason | undefined;
 };
 
 /**
@@ -131,10 +139,10 @@ export function applyPatch(
   const draft: SceneSpec = structuredClone(spec);
   const byId = new Map(draft.nodes.map((node) => [node.id, node]));
 
-  for (let index = 0; index < patch.ops.length; index += 1) {
-    const op = patch.ops[index];
-    if (op === undefined) continue;
-    const failure = applyOp(draft, byId, op, index);
+  // The index travels centrally: every operation-level failure names the exact
+  // operation to fix, including remove/add errors.
+  for (const [opIndex, op] of patch.ops.entries()) {
+    const failure = applyOp(draft, byId, op, opIndex);
     if (failure !== undefined) return { ok: false, error: failure };
   }
 
@@ -155,16 +163,25 @@ function applyOp(
   draft: SceneSpec,
   byId: Map<string, SceneSpec["nodes"][number]>,
   op: PatchOp,
-  index: number,
+  opIndex: number,
 ): PatchError | undefined {
   switch (op.op) {
     case "set_param": {
       const node = byId.get(op.nodeId);
-      if (node === undefined) return unknownNode(op.nodeId, index);
+      if (node === undefined) {
+        return {
+          code: "unknown_node",
+          message: `node "${op.nodeId}" does not exist`,
+          opIndex,
+          path: op.nodeId,
+        };
+      }
       if (node.kind !== "procedural") {
         return {
           code: "not_procedural",
-          message: `${where(index, op)} node "${op.nodeId}" has no editable parameters`,
+          message: `node "${op.nodeId}" has no editable parameters`,
+          opIndex,
+          path: op.nodeId,
         };
       }
       const editable = EDITABLE_PARAMS[node.op] ?? [];
@@ -172,21 +189,37 @@ function applyOp(
         return {
           code: "unknown_param",
           message:
-            `${where(index, op)} "${op.key}" is not an editable parameter of ${node.op} ` +
+            `"${op.key}" is not an editable parameter of ${node.op} ` +
             `(editable: ${editable.join(", ")})`,
+          opIndex,
+          path: op.key,
         };
       }
       if (!isFiniteNumber(op.value)) {
         return {
           code: "invalid_value",
-          message: `${where(index, op)} "${op.key}" must be a finite number, got ${op.value}`,
+          message: `"${op.key}" must be a finite number, got ${op.value}`,
+          opIndex,
+          path: op.key,
+          reason: "constraint",
         };
       }
-      const paramError = checkParamValue(node.op, node.params, op.key, op.value);
-      if (paramError !== undefined) {
+      // Validated against the real parameter schema for this operation, so the
+      // op-level check can never drift from what the scene accepts — including
+      // interactions between parameters, like shrinking a dimension below
+      // twice the existing bevel.
+      const params = { ...node.params, [op.key]: op.value };
+      const parsed =
+        node.op === "box"
+          ? BoxParamsSchema.safeParse(params)
+          : CylinderParamsSchema.safeParse(params);
+      if (!parsed.success) {
         return {
           code: "invalid_value",
-          message: `${where(index, op)} "${op.key}" on "${op.nodeId}": got ${op.value} — ${paramError}`,
+          message: describeParamIssue(op.key, op.value, parsed.error.issues[0]),
+          opIndex,
+          path: op.key,
+          reason: toReason(parsed.error.issues[0]),
         };
       }
       (node.params as Record<string, unknown>)[op.key] = op.value;
@@ -194,17 +227,33 @@ function applyOp(
     }
     case "set_transform": {
       const node = byId.get(op.nodeId);
-      if (node === undefined) return unknownNode(op.nodeId, index);
+      if (node === undefined) {
+        return {
+          code: "unknown_node",
+          message: `node "${op.nodeId}" does not exist`,
+          opIndex,
+          path: op.nodeId,
+        };
+      }
       node.transform = op.transform;
       return undefined;
     }
     case "set_material": {
       const node = byId.get(op.nodeId);
-      if (node === undefined) return unknownNode(op.nodeId, index);
+      if (node === undefined) {
+        return {
+          code: "unknown_node",
+          message: `node "${op.nodeId}" does not exist`,
+          opIndex,
+          path: op.nodeId,
+        };
+      }
       if (node.kind !== "procedural") {
         return {
           code: "not_procedural",
-          message: `${where(index, op)} node "${op.nodeId}" carries no material`,
+          message: `node "${op.nodeId}" carries no material`,
+          opIndex,
+          path: op.nodeId,
         };
       }
       const available = draft.materials.map((material) => material.id);
@@ -212,11 +261,13 @@ function applyOp(
         return {
           code: "unknown_material",
           message:
-            `${where(index, op)} unknown material "${op.materialId}"` +
+            `unknown material "${op.materialId}"` +
             (available.length > 0
               ? ` (available: ${available.join(", ")})`
               : " (the scene carries no materials)") +
             ` — add the material to the scene first, or pick one it already carries`,
+          opIndex,
+          path: "materialId",
         };
       }
       node.materialId = op.materialId;
@@ -224,15 +275,34 @@ function applyOp(
     }
     case "rename": {
       const node = byId.get(op.nodeId);
-      if (node === undefined) return unknownNode(op.nodeId, index);
+      if (node === undefined) {
+        return {
+          code: "unknown_node",
+          message: `node "${op.nodeId}" does not exist`,
+          opIndex,
+          path: op.nodeId,
+        };
+      }
       node.name = op.name;
       return undefined;
     }
     case "remove_node": {
       const node = byId.get(op.nodeId);
-      if (node === undefined) return unknownNode(op.nodeId, index);
+      if (node === undefined) {
+        return {
+          code: "unknown_node",
+          message: `node "${op.nodeId}" does not exist`,
+          opIndex,
+          path: op.nodeId,
+        };
+      }
       if (op.nodeId === draft.root) {
-        return { code: "cannot_remove_root", message: "the root node cannot be removed" };
+        return {
+          code: "cannot_remove_root",
+          message: "the root node cannot be removed",
+          opIndex,
+          path: op.nodeId,
+        };
       }
       // Detach from every group first, then drop the subtree, so no dangling child
       // reference survives even if validation below were ever skipped.
@@ -260,10 +330,20 @@ function applyOp(
     case "add_node": {
       const parent = byId.get(op.parentId);
       if (parent === undefined) {
-        return { code: "unknown_parent", message: `parent "${op.parentId}" names no node` };
+        return {
+          code: "unknown_parent",
+          message: `parent "${op.parentId}" names no node`,
+          opIndex,
+          path: op.parentId,
+        };
       }
       if (parent.kind !== "group") {
-        return { code: "unknown_parent", message: `parent "${op.parentId}" is not a group` };
+        return {
+          code: "unknown_parent",
+          message: `parent "${op.parentId}" is not a group`,
+          opIndex,
+          path: op.parentId,
+        };
       }
       const parsed = validateSceneSpec({
         ...structuredClone(draft),
@@ -278,18 +358,35 @@ function applyOp(
           return {
             code: "duplicate_node_id",
             message: `a node named "${duplicate}" already exists`,
+            opIndex,
+            path: duplicate,
           };
         }
-        return { code: "invalid_value", message: `added node is invalid: ${parsed.error.message}` };
+        return {
+          code: "invalid_value",
+          message: `added node is invalid: ${parsed.error.message}`,
+          opIndex,
+          reason: "constraint",
+        };
       }
       const added = parsed.value.nodes[parsed.value.nodes.length - 1];
       if (added === undefined) {
-        return { code: "invalid_value", message: "added node vanished during validation" };
+        return {
+          code: "invalid_value",
+          message: "added node vanished during validation",
+          opIndex,
+          reason: "constraint",
+        };
       }
       draft.nodes.push(added);
       const stored = draft.nodes[draft.nodes.length - 1];
       if (stored === undefined) {
-        return { code: "invalid_value", message: "added node vanished during validation" };
+        return {
+          code: "invalid_value",
+          message: "added node vanished during validation",
+          opIndex,
+          reason: "constraint",
+        };
       }
       byId.set(added.id, stored);
       parent.children.push(added.id);
@@ -298,86 +395,38 @@ function applyOp(
   }
 }
 
-function unknownNode(nodeId: string, index: number): PatchError {
-  return { code: "unknown_node", message: `op ${index}: node "${nodeId}" does not exist` };
+/**
+ * Map a parameter-schema issue to a machine-readable reason: an `int` type
+ * rejection is `not_integer`, range rejections map directly, and anything
+ * else (refinements like the bevel bound) is a `constraint`.
+ */
+function toReason(issue: unknown): PatchErrorReason {
+  const viewed = issue as
+    | { code?: unknown; expected?: unknown; minimum?: unknown; maximum?: unknown }
+    | undefined;
+  if (viewed === undefined) return "constraint";
+  if (viewed.code === "too_small") return "too_small";
+  if (viewed.code === "too_big") return "too_big";
+  if (viewed.code === "invalid_type" && viewed.expected === "int") return "not_integer";
+  return "constraint";
 }
 
-/**
- * Where an operation sits in its patch, e.g. `op 2 (set_param)`.
- *
- * Every operation-level diagnostic starts with this so a rejected multi-op
- * patch names the exact operation to fix rather than leaving the caller to
- * count.
- */
-function where(index: number, op: PatchOp): string {
-  return `op ${index} (${op.op})`;
-}
-
-/** Integer-only parameter bounds, from the same limits the schema enforces. */
-const INTEGER_PARAMS: Record<string, { min: number; max: number }> = {
-  radialSegments: { min: MIN_RADIAL_SEGMENTS, max: MAX_RADIAL_SEGMENTS },
-  heightSegments: { min: MIN_HEIGHT_SEGMENTS, max: MAX_HEIGHT_SEGMENTS },
-};
-
-/** Linear-dimension parameters, bounded by the schema's dimension range. */
-const DIMENSION_PARAMS: ReadonlySet<string> = new Set([
-  "width",
-  "height",
-  "depth",
-  "radiusTop",
-  "radiusBottom",
-]);
-
-/**
- * Check one parameter value against the target operation's own constraints —
- * the same bounds `schema.ts` enforces — so a bad value fails here with the
- * parameter named instead of collapsing into a generic `invalid_result` after
- * the whole patch applied. Returns the constraint description, or undefined
- * when the value is acceptable.
- *
- * The bevel bound reads the node's live dimensions (with the new value merged
- * in when the edit targets a dimension itself), matching the schema's "at most
- * half the smallest dimension" rule for the state this operation produces.
- * Cross-operation interactions (e.g. bevel now, shrink the box two ops later)
- * still fall through to the final revalidation — atomicity is unchanged.
- */
-function checkParamValue(
-  nodeOp: string,
-  params: Record<string, unknown>,
-  key: string,
-  value: number,
-): string | undefined {
-  const integer = INTEGER_PARAMS[key];
-  if (integer !== undefined) {
-    if (!Number.isInteger(value)) {
-      return `${key} must be an integer in [${integer.min}, ${integer.max}] — use ${Math.round(value)} or another whole number`;
-    }
-    if (value < integer.min || value > integer.max) {
-      return `${key} must be an integer in [${integer.min}, ${integer.max}]`;
-    }
-    return undefined;
+/** Short corrective message for a rejected parameter value. */
+function describeParamIssue(key: string, value: number, issue: unknown): string {
+  const viewed = issue as
+    | { code?: unknown; minimum?: unknown; maximum?: unknown; message?: unknown }
+    | undefined;
+  if (viewed?.code === "invalid_type") {
+    return `"${key}" must be an integer, got ${value}`;
   }
-  if (DIMENSION_PARAMS.has(key)) {
-    if (value < MIN_DIMENSION_M || value > MAX_DIMENSION_M) {
-      return `${key} must be in [${MIN_DIMENSION_M}, ${MAX_DIMENSION_M}] meters`;
-    }
-    return undefined;
+  if (viewed?.code === "too_small" && typeof viewed.minimum === "number") {
+    return `"${key}" must be at least ${viewed.minimum}, got ${value}`;
   }
-  if (key === "bevel" && nodeOp === "box") {
-    if (value < 0 || value > MAX_DIMENSION_M) {
-      return `bevel must be in [0, ${MAX_DIMENSION_M}] meters`;
-    }
-    const dims = ["width", "height", "depth"].map((dim) => (dim === key ? value : params[dim]));
-    if (dims.every((dim) => typeof dim === "number" && Number.isFinite(dim))) {
-      const smallest = Math.min(...(dims as number[]));
-      const limit = smallest / 2;
-      if (value > limit) {
-        return `bevel must be at most half the smallest dimension (${limit} m for a smallest dimension of ${smallest} m)`;
-      }
-    }
-    return undefined;
+  if (viewed?.code === "too_big" && typeof viewed.maximum === "number") {
+    return `"${key}" must be at most ${viewed.maximum}, got ${value}`;
   }
-  return undefined;
+  if (typeof viewed?.message === "string") return `"${key}" ${viewed.message}, got ${value}`;
+  return `"${key}" is invalid, got ${value}`;
 }
 
 function shortHash(hash: string): string {
