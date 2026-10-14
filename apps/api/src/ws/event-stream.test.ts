@@ -12,7 +12,7 @@ import type {
 } from "@nap/shared/ports/event-store";
 import { type ServerFrame, ServerFrameSchema, WS_CLOSE } from "@nap/shared/ws-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { openEventStream } from "./event-stream.ts";
+import { openEventStream, TurnStreamBus, type TurnStreamEvent } from "./event-stream.ts";
 
 /**
  * The whole streaming layer's correctness lives in this file, and none of it needs a socket:
@@ -642,3 +642,174 @@ describe("close", () => {
     expect(socket.sent).toEqual([]);
   });
 });
+
+describe("turn stream events", () => {
+  it("broadcasts all TurnStreamEvent variants to connected socket", async () => {
+    const store = new InMemoryEventStore();
+    const bus = new InMemoryEventBus();
+    const turnBus = new TurnStreamBus();
+    const socket = new FakeSocket();
+
+    const stream = openEventStream({
+      store,
+      bus,
+      sessionId: SESSION,
+      afterSeq: 0,
+      socket,
+      turnBus,
+    });
+    await stream.ready;
+    socket.clear();
+
+    const events: TurnStreamEvent[] = [
+      {
+        type: "turn.state_changed",
+        turnId: TURN,
+        from: "queued",
+        to: "planning_scene",
+        timestamp: "2026-08-09T12:00:00.000Z",
+      },
+      {
+        type: "turn.needs_input",
+        turnId: TURN,
+        ambiguityReason: "Dimensions missing",
+        questions: ["What size?"],
+      },
+      {
+        type: "turn.plan_ready",
+        turnId: TURN,
+        sceneSummary: "office desk",
+        totalSteps: 2,
+        steps: [
+          { stepId: "s1", goal: "frame" },
+          { stepId: "s2", goal: "top" },
+        ],
+      },
+      {
+        type: "turn.step_started",
+        turnId: TURN,
+        stepIndex: 0,
+        stepId: "s1",
+        attempt: 1,
+        model: "qwen/qwen-2.5-coder-32b-instruct",
+      },
+      {
+        type: "turn.gate_result",
+        turnId: TURN,
+        stepId: "s1",
+        attempt: 1,
+        gate: 1,
+        passed: true,
+      },
+      {
+        type: "turn.step_committed",
+        turnId: TURN,
+        stepIndex: 0,
+        stepId: "s1",
+        newRevision: 1,
+        sceneDelta: { added: ["desk_frame"] },
+      },
+      {
+        type: "turn.stale_rebase",
+        turnId: TURN,
+        expectedRevision: 1,
+        actualRevision: 2,
+        rebaseAttempt: 1,
+      },
+      {
+        type: "turn.completed",
+        turnId: TURN,
+        finalRevision: 2,
+      },
+      {
+        type: "turn.failed",
+        turnId: TURN,
+        stepId: "s1",
+        reason: "Retry budget exhausted",
+      },
+    ];
+
+    for (const event of events) {
+      turnBus.broadcast(SESSION, event);
+    }
+
+    expect(socket.sent).toHaveLength(9);
+    for (let i = 0; i < events.length; i++) {
+      expect(JSON.parse(socket.sent[i]!)).toEqual(events[i]);
+    }
+  });
+
+  it("isolates turn stream events by session", async () => {
+    const store = new InMemoryEventStore();
+    const bus = new InMemoryEventBus();
+    const turnBus = new TurnStreamBus();
+    const socket = new FakeSocket();
+
+    const stream = openEventStream({
+      store,
+      bus,
+      sessionId: SESSION,
+      afterSeq: 0,
+      socket,
+      turnBus,
+    });
+    await stream.ready;
+    socket.clear();
+
+    turnBus.broadcast(OTHER_SESSION, {
+      type: "turn.completed",
+      turnId: "other-turn",
+      finalRevision: 1,
+    });
+
+    expect(socket.sent).toHaveLength(0);
+  });
+
+  it("sendTurnEvent delivers directly on the stream instance", async () => {
+    const store = new InMemoryEventStore();
+    const bus = new InMemoryEventBus();
+    const socket = new FakeSocket();
+
+    const stream = openEventStream({
+      store,
+      bus,
+      sessionId: SESSION,
+      afterSeq: 0,
+      socket,
+    });
+    await stream.ready;
+    socket.clear();
+
+    const event: TurnStreamEvent = {
+      type: "turn.completed",
+      turnId: TURN,
+      finalRevision: 3,
+    };
+    stream.sendTurnEvent(event);
+
+    expect(socket.sent).toHaveLength(1);
+    expect(JSON.parse(socket.sent[0]!)).toEqual(event);
+  });
+
+  it("unsubscribes from turnBus on close", async () => {
+    const store = new InMemoryEventStore();
+    const bus = new InMemoryEventBus();
+    const turnBus = new TurnStreamBus();
+    const socket = new FakeSocket();
+
+    const stream = openEventStream({
+      store,
+      bus,
+      sessionId: SESSION,
+      afterSeq: 0,
+      socket,
+      turnBus,
+    });
+    await stream.ready;
+    expect(turnBus.subscriberCount).toBe(1);
+
+    stream.onClose();
+    expect(turnBus.subscriberCount).toBe(0);
+  });
+});
+

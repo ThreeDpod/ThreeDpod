@@ -2,10 +2,14 @@ import type { ModelCredentials } from "@nap/shared/ports/llm-provider";
 import { describe, expect, it } from "vitest";
 import {
   availableModels,
+  createOpenRouterCaller,
+  extractCleanJson,
+  getModelConfigForRole,
   isFree,
   resolveTurnAccess,
   type TurnAccessRequest,
 } from "./model-access.ts";
+import type { Env } from "../env.ts";
 
 /** The shape of a real allowlist: cheap paid, expensive paid, and free. */
 const ALLOWED = [
@@ -181,3 +185,177 @@ describe("availableModels", () => {
     }
   });
 });
+
+describe("getModelConfigForRole", () => {
+  const fakeEnv = {
+    ORCHESTRATOR_VISION_MODEL: "openai/gpt-5.6-luna",
+    SCENE_PLANNER_MODEL: "deepseek/deepseek-r1",
+    GEOMETRY_BUILDER_MODEL: "qwen/qwen-2.5-coder-32b-instruct",
+    FALLBACK_BUILDER_MODEL: "openai/gpt-5.6-luna",
+  } as unknown as Env;
+
+  it("returns correct config for intake_vision", () => {
+    expect(getModelConfigForRole("intake_vision", fakeEnv)).toEqual({
+      model: "openai/gpt-5.6-luna",
+      temperature: 0.2,
+      maxTokens: 1500,
+    });
+  });
+
+  it("returns correct config for scene_planner", () => {
+    expect(getModelConfigForRole("scene_planner", fakeEnv)).toEqual({
+      model: "deepseek/deepseek-r1",
+      temperature: 0.6,
+      maxTokens: 4096,
+    });
+  });
+
+  it("returns correct config for geometry_builder", () => {
+    expect(getModelConfigForRole("geometry_builder", fakeEnv)).toEqual({
+      model: "qwen/qwen-2.5-coder-32b-instruct",
+      temperature: 0.1,
+      maxTokens: 2500,
+      responseFormat: { type: "json_object" },
+    });
+  });
+
+  it("returns correct config for geometry_fallback", () => {
+    expect(getModelConfigForRole("geometry_fallback", fakeEnv)).toEqual({
+      model: "openai/gpt-5.6-luna",
+      temperature: 0.1,
+      maxTokens: 2500,
+      responseFormat: { type: "json_object" },
+    });
+  });
+
+  it("returns correct config for vision_validator", () => {
+    expect(getModelConfigForRole("vision_validator", fakeEnv)).toEqual({
+      model: "openai/gpt-5.6-luna",
+      temperature: 0.0,
+      maxTokens: 1024,
+      responseFormat: { type: "json_object" },
+    });
+  });
+});
+
+describe("extractCleanJson", () => {
+  it("leaves clean JSON untouched", () => {
+    const raw = '{"hello": "world"}';
+    expect(extractCleanJson(raw)).toBe(raw);
+  });
+
+  it("trims whitespace", () => {
+    const raw = '   \n\t {"hello": "world"}  \n ';
+    expect(extractCleanJson(raw)).toBe('{"hello": "world"}');
+  });
+
+  it("strips DeepSeek-R1 <think> blocks", () => {
+    const raw = `<think>
+I need to plan the desk and chairs.
+Let's make sure the table is 1.5m wide.
+</think>
+{"status": "ready", "sceneSummary": "office desk"}
+`;
+    expect(extractCleanJson(raw)).toBe('{"status": "ready", "sceneSummary": "office desk"}');
+  });
+
+  it("strips markdown json fences", () => {
+    const raw = `\`\`\`json
+{
+  "stepId": "step_1",
+  "operations": []
+}
+\`\`\``;
+    expect(extractCleanJson(raw)).toBe('{\n  "stepId": "step_1",\n  "operations": []\n}');
+  });
+
+  it("strips bare markdown fences", () => {
+    const raw = `\`\`\`
+{"valid": true}
+\`\`\``;
+    expect(extractCleanJson(raw)).toBe('{"valid": true}');
+  });
+
+  it("handles both <think> blocks and code fences together", () => {
+    const raw = `<think>
+Thinking about operations...
+</think>
+\`\`\`json
+{"stepId": "test"}
+\`\`\``;
+    expect(extractCleanJson(raw)).toBe('{"stepId": "test"}');
+  });
+});
+
+describe("createOpenRouterCaller", () => {
+  it("formats request correctly and extracts content from response", async () => {
+    const originalFetch = globalThis.fetch;
+    let requestedUrl = "";
+    let requestedHeaders: Record<string, string> = {};
+    let requestedBody: any = null;
+
+    globalThis.fetch = (async (url: any, init: any) => {
+      requestedUrl = String(url);
+      requestedHeaders = init.headers;
+      requestedBody = JSON.parse(init.body);
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: '{"status": "ok"}' } }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as any;
+
+    try {
+      const caller = createOpenRouterCaller({
+        apiKey: "sk-or-test-key",
+        baseUrl: "https://custom.openrouter.ai/api/v1",
+      });
+
+      const res = await caller({
+        config: {
+          model: "deepseek/deepseek-r1",
+          temperature: 0.6,
+          maxTokens: 4096,
+        },
+        systemPrompt: "You are the Scene Planner",
+        userContent: "Build a desk",
+      });
+
+      expect(res).toBe('{"status": "ok"}');
+      expect(requestedUrl).toBe("https://custom.openrouter.ai/api/v1/chat/completions");
+      expect(requestedHeaders["Authorization"]).toBe("Bearer sk-or-test-key");
+      expect(requestedBody.model).toBe("deepseek/deepseek-r1");
+      expect(requestedBody.temperature).toBe(0.6);
+      expect(requestedBody.max_tokens).toBe(4096);
+      expect(requestedBody.messages).toEqual([
+        { role: "system", content: "You are the Scene Planner" },
+        { role: "user", content: "Build a desk" },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("throws descriptive error when API answers non-200", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      return new Response("Insufficient balance", { status: 402 });
+    }) as any;
+
+    try {
+      const caller = createOpenRouterCaller({ apiKey: "sk-or-key" });
+      await expect(
+        caller({
+          config: { model: "test", temperature: 0, maxTokens: 100 },
+          systemPrompt: "sys",
+          userContent: "usr",
+        }),
+      ).rejects.toThrow("OpenRouter API error 402: Insufficient balance");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+

@@ -21,6 +21,68 @@
 import type { EventBus, Unsubscribe } from "@nap/shared/ports/event-bus";
 import type { EventStore, StoredEvent } from "@nap/shared/ports/event-store";
 import { parseClientFrame, type ServerFrame, WS_CLOSE } from "@nap/shared/ws-protocol";
+import type { TurnState } from "../turns/state-machine.ts";
+
+/**
+ * Real-time event contract emitted for every state transition and gate outcome in the
+ * multi-model pipeline. Delivered directly over the WebSocket to inform the frontend
+ * viewport and UI of live step progression, clarification requests, and commits.
+ */
+export type TurnStreamEvent =
+  | { type: "turn.state_changed"; turnId: string; from: TurnState; to: TurnState; timestamp: string }
+  | { type: "turn.needs_input"; turnId: string; ambiguityReason: string; questions: string[] }
+  | { type: "turn.plan_ready"; turnId: string; sceneSummary: string; totalSteps: number; steps: Array<{ stepId: string; goal: string }> }
+  | { type: "turn.step_started"; turnId: string; stepIndex: number; stepId: string; attempt: number; model: string }
+  | { type: "turn.gate_result"; turnId: string; stepId: string; attempt: number; gate: 1 | 2 | 3; passed: boolean; diagnostics?: string }
+  | { type: "turn.step_committed"; turnId: string; stepIndex: number; stepId: string; newRevision: number; sceneDelta: unknown }
+  | { type: "turn.stale_rebase"; turnId: string; expectedRevision: number; actualRevision: number; rebaseAttempt: number }
+  | { type: "turn.completed"; turnId: string; finalRevision: number }
+  | { type: "turn.failed"; turnId: string; stepId?: string; reason: string };
+
+export type TurnStreamListener = (event: TurnStreamEvent) => void;
+
+/**
+ * Pub/sub bus for turn pipeline real-time stream events, keyed by session ID.
+ */
+export class TurnStreamBus {
+  readonly #subscribers = new Map<string, Set<TurnStreamListener>>();
+
+  subscribe(sessionId: string, listener: TurnStreamListener): () => void {
+    let set = this.#subscribers.get(sessionId);
+    if (!set) {
+      set = new Set();
+      this.#subscribers.set(sessionId, set);
+    }
+    set.add(listener);
+    return () => {
+      set.delete(listener);
+      if (set.size === 0) this.#subscribers.delete(sessionId);
+    };
+  }
+
+  broadcast(sessionId: string, event: TurnStreamEvent): void {
+    const set = this.#subscribers.get(sessionId);
+    if (!set) return;
+    for (const listener of set) {
+      listener(event);
+    }
+  }
+
+  get subscriberCount(): number {
+    let total = 0;
+    for (const set of this.#subscribers.values()) total += set.size;
+    return total;
+  }
+}
+
+export const globalTurnStreamBus = new TurnStreamBus();
+
+/**
+ * Global helper to broadcast a TurnStreamEvent to all active WebSockets watching a session.
+ */
+export function broadcastTurnEvent(sessionId: string, event: TurnStreamEvent): void {
+  globalTurnStreamBus.broadcast(sessionId, event);
+}
 
 /** The two things this needs from a socket. */
 export type StreamSocket = {
@@ -49,6 +111,7 @@ export type EventStreamOptions = {
   afterSeq: number;
   socket: StreamSocket;
   heartbeat?: HeartbeatOptions;
+  turnBus?: TurnStreamBus;
 };
 
 export type EventStream = {
@@ -56,11 +119,14 @@ export type EventStream = {
   onMessage(raw: unknown): void;
   /** Releases the subscription and the heartbeat. Safe to call more than once. */
   onClose(): void;
+  /** Directly send a TurnStreamEvent over the connected socket. */
+  sendTurnEvent(event: TurnStreamEvent): void;
   /** Resolves once the replay has been delivered. Tests await it; the socket does not. */
   ready: Promise<void>;
 };
 
 export function openEventStream(options: EventStreamOptions): EventStream {
+
   const { store, bus, sessionId, afterSeq, socket } = options;
   const heartbeat = options.heartbeat ?? DEFAULT_HEARTBEAT;
 
@@ -99,6 +165,12 @@ export function openEventStream(options: EventStreamOptions): EventStream {
     sendEvent(event);
   });
 
+  const turnBus = options.turnBus ?? globalTurnStreamBus;
+  const unsubscribeTurn = turnBus.subscribe(sessionId, (turnEvent) => {
+    if (closed) return;
+    send(turnEvent);
+  });
+
   const timer = setInterval(() => {
     if (closed) return;
     silentIntervals += 1;
@@ -115,6 +187,7 @@ export function openEventStream(options: EventStreamOptions): EventStream {
     closed = true;
     clearInterval(timer);
     unsubscribe();
+    unsubscribeTurn();
   }
 
   const ready = (async () => {
@@ -138,6 +211,9 @@ export function openEventStream(options: EventStreamOptions): EventStream {
   return {
     ready,
     onClose: shutdown,
+    sendTurnEvent(event: TurnStreamEvent): void {
+      send(event);
+    },
     onMessage(raw: unknown): void {
       if (closed) return;
       // Any frame at all proves the client is alive — waiting specifically for a pong would
@@ -150,3 +226,4 @@ export function openEventStream(options: EventStreamOptions): EventStream {
     },
   };
 }
+

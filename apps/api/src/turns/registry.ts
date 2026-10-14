@@ -20,8 +20,20 @@
  * only removed if it is still the one that was adopted.
  */
 
+import type { TurnState } from "./state-machine.ts";
+
+export type ActiveTurn = {
+  turnId: string;
+  sessionId: string;
+  userId: string;
+  projectId?: string;
+  state: TurnState;
+  submitClarification?: (answers: string[]) => boolean;
+};
+
 export class TurnRegistry {
   readonly #running = new Map<string, AbortController>();
+  readonly #activeTurns = new Map<string, ActiveTurn>();
 
   /**
    * Records that this process is running a turn on this session, and how to stop it.
@@ -54,4 +66,114 @@ export class TurnRegistry {
     if (this.#running.get(sessionId) !== controller) return;
     this.#running.delete(sessionId);
   }
+
+  /**
+   * Registers an active turn for lifecycle state tracking and clarification coordination.
+   */
+  registerTurn(turn: ActiveTurn): void {
+    this.#activeTurns.set(turn.turnId, turn);
+  }
+
+  /**
+   * Looks up an active turn by its turnId.
+   */
+  getTurn(turnId: string): ActiveTurn | undefined {
+    return this.#activeTurns.get(turnId);
+  }
+
+  /**
+   * Updates the lifecycle state of an active turn.
+   */
+  updateTurnState(turnId: string, state: TurnState): void {
+    const turn = this.#activeTurns.get(turnId);
+    if (turn !== undefined) {
+      turn.state = state;
+    }
+  }
+
+  /**
+   * Unregisters an active turn once it finishes or aborts.
+   */
+  unregisterTurn(turnId: string): void {
+    this.#activeTurns.delete(turnId);
+  }
 }
+
+import type { SceneState } from "./deterministic-builder.ts";
+import { emptyScene } from "./deterministic-builder.ts";
+
+export type CommitResult =
+  | { status: "committed"; newRevision: number; candidateScene: SceneState }
+  | { status: "stale_base"; currentRevision: number };
+
+/**
+ * Scene registry managing committed 3D scene state with optimistic concurrency.
+ *
+ * Each project has a monotonically increasing integer revision. When an atomic step
+ * passes Gates 1, 2, and 3, `commitCandidate` verifies that the scene's revision
+ * has not changed since planning began (`expectedWorkingRevision === currentRevision`).
+ *
+ * If a concurrent turn or edit incremented the revision, the commit returns
+ * `{ status: "stale_base", currentRevision }`, triggering the turn state machine
+ * to transition to `stale` and replan against the updated state.
+ */
+export class SceneRegistry {
+  readonly #scenes = new Map<string, SceneState>();
+
+  /**
+   * Returns the current integer revision for a project's scene.
+   * Defaults to 0 if no scene exists yet for the project.
+   */
+  getRevision(projectId: string): number {
+    return this.#scenes.get(projectId)?.revision ?? 0;
+  }
+
+  /**
+   * Returns the committed scene state for a project, initializing an empty
+   * scene at revision 0 if none has been registered yet.
+   */
+  getScene(projectId: string): SceneState {
+    const existing = this.#scenes.get(projectId);
+    if (existing !== undefined) return existing;
+    const initial = emptyScene(0);
+    this.#scenes.set(projectId, initial);
+    return initial;
+  }
+
+  /**
+   * Attempts to commit an accepted candidate scene against the expected working revision.
+   *
+   * If `currentRevision !== expectedWorkingRevision`, the scene is NOT overwritten and
+   * `{ status: "stale_base", currentRevision }` is returned.
+   * Otherwise, increments the revision monotonically and persists the new scene state.
+   */
+  commitCandidate(
+    projectId: string,
+    expectedWorkingRevision: number,
+    candidateScene: SceneState,
+    _stepMetadata?: unknown,
+  ): CommitResult {
+    const current = this.getScene(projectId);
+    if (current.revision !== expectedWorkingRevision) {
+      return { status: "stale_base", currentRevision: current.revision };
+    }
+
+    const nextRevision = current.revision + 1;
+    const committed: SceneState = {
+      nodes: new Map(candidateScene.nodes),
+      revision: nextRevision,
+    };
+    this.#scenes.set(projectId, committed);
+    return { status: "committed", newRevision: nextRevision, candidateScene: committed };
+  }
+
+  /** Directly sets a scene state, used for testing or snapshot restoration. */
+  setScene(projectId: string, scene: SceneState): void {
+    this.#scenes.set(projectId, scene);
+  }
+}
+
+/** Singleton scene registry instance for standard runtime use. */
+export const globalSceneRegistry = new SceneRegistry();
+
+

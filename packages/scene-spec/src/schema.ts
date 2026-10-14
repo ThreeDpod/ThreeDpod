@@ -54,11 +54,21 @@ export const TransformSchema = z.strictObject({
 export type SceneTransform = z.infer<typeof TransformSchema>;
 
 function dimension() {
-  return z
-    .number()
-    .refine((n) => Number.isFinite(n) && n >= MIN_DIMENSION_M && n <= MAX_DIMENSION_M, {
-      message: `must be a finite dimension in [${MIN_DIMENSION_M}, ${MAX_DIMENSION_M}] meters`,
-    });
+  return (
+    z
+      .number()
+      // Finiteness first: NaN and infinities never reach the range checks, so a
+      // non-finite value fails as non-finite rather than as out of range.
+      .refine((n) => Number.isFinite(n), {
+        message: "must be a finite number",
+      })
+      // Range as real min/max checks (not one combined refinement) so callers —
+      // including patch validation — can distinguish too_small from too_big.
+      // The accepted set is unchanged: finite numbers in
+      // [MIN_DIMENSION_M, MAX_DIMENSION_M] meters.
+      .min(MIN_DIMENSION_M, `must be at least ${MIN_DIMENSION_M} meters`)
+      .max(MAX_DIMENSION_M, `must be at most ${MAX_DIMENSION_M} meters`)
+  );
 }
 
 export const BoxParamsSchema = z

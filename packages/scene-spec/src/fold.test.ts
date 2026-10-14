@@ -63,7 +63,8 @@ describe("foldSceneSpec", () => {
     expect(twice).toEqual(once);
   });
 
-  it("resolves conflicting branches by order: later wins, deterministically", () => {    const genesis = towerSpec();
+  it("resolves conflicting branches by order: later wins, deterministically", () => {
+    const genesis = towerSpec();
     const genesisHash = hashSceneSpec(genesis);
     const wide = widened();
     const renamed = applyPatch(

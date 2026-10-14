@@ -36,6 +36,8 @@ export const STRANGER = "00000000-0000-4000-8000-0000000000ff";
 
 export const PROJECT = "1f2e3d4c-5b6a-4798-8765-43210fedcba9";
 export const SESSION = "0b7f8f1e-3c2a-4d5b-9e6f-1a2b3c4d5e6f";
+export const TURN = "3a2b1c0d-4e5f-6a7b-8c9d-0e1f2a3b4c5d";
+
 
 type RouteEntry = {
   method: string;
@@ -122,6 +124,12 @@ export const GUARDED_ROUTES: GuardedRoute[] = [
     path: "/sessions/:sessionId/turns/cancel",
     examplePath: `/sessions/${SESSION}/turns/cancel`,
   },
+  {
+    method: "POST",
+    path: "/api/turns/:turnId/clarify",
+    examplePath: `/api/turns/${TURN}/clarify`,
+    body: { answers: ["yes", "0.5m"] },
+  },
 ];
 
 export type SeededSandbox = {
@@ -196,7 +204,17 @@ export function fullyWiredDeps(seeded?: SeededSandbox): Omit<AppDeps, "logger"> 
       // Never actually reached by an authorization test: a request that got as far as being
       // queued would mean the route let somebody through, which is the thing being tested.
       queue: new InMemoryTurnQueue(),
-      registry: new TurnRegistry(),
+      registry: (() => {
+        const reg = new TurnRegistry();
+        reg.registerTurn({
+          turnId: TURN,
+          sessionId: SESSION,
+          userId: OWNER,
+          state: "needs_input",
+          submitClarification: () => true,
+        });
+        return reg;
+      })(),
       freeModel: FREE_MODEL,
       defaultModel: "openai/gpt-5.6-luna",
       allowedModels: ["openai/gpt-5.6-luna"],

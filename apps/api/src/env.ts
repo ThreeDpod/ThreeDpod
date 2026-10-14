@@ -321,6 +321,59 @@ const BaseSchema = z.object({
    * than one that says it has none.
    */
   NAP_CHROME_PATH: z.string().min(1).optional(),
+
+  // ── Multi-model pipeline configuration ──────────────────────────────────────
+  //
+  // The turn pipeline routes requests through three specialised models rather than
+  // one generalist. These configure which OpenRouter models handle each role, and
+  // the retry/rebase budgets that bound how many times a failing step is re-attempted.
+
+  /** Base URL for the OpenRouter API. Only overridden for testing or proxies. */
+  OPENROUTER_BASE_URL: z.url().default("https://openrouter.ai/api/v1"),
+
+  /**
+   * GPT Luna handles two roles: multimodal intake (parsing user images/prompts into
+   * structured intent) and Gate 3 vision validation (inspecting rendered screenshots).
+   * It is the only model in the pipeline that processes images.
+   */
+  ORCHESTRATOR_VISION_MODEL: z.string().min(1).default("openai/gpt-5.6-luna"),
+
+  /**
+   * DeepSeek-R1 as the "Thinker": evaluates request sufficiency, detects ambiguity,
+   * and decomposes construction into ordered atomic steps. Its `<think>` reasoning
+   * blocks are stripped before JSON parsing.
+   */
+  SCENE_PLANNER_MODEL: z.string().min(1).default("deepseek/deepseek-r1"),
+
+  /**
+   * Qwen 2.5 Coder as the "Builder": generates procedural JSON for each atomic step.
+   * Chosen for its strong structured-output compliance and code generation accuracy.
+   * Runs with `responseFormat: { type: "json_object" }` and low temperature.
+   */
+  GEOMETRY_BUILDER_MODEL: z.string().min(1).default("qwen/qwen-2.5-coder-32b-instruct"),
+
+  /**
+   * Fallback builder model, used on the final retry if the primary builder (Qwen)
+   * fails Gate 1 or Gate 2. Defaults to GPT Luna, which is more expensive but more
+   * reliably produces valid JSON.
+   */
+  FALLBACK_BUILDER_MODEL: z.string().min(1).default("openai/gpt-5.6-luna"),
+
+  /**
+   * How many times a single atomic step may be retried across all three gates before
+   * the turn transitions to `failed`. A budget of 3 means 4 total attempts (1 initial
+   * + 3 retries). Higher values increase latency and cost; lower values risk failing
+   * on steps that would have succeeded with one more try.
+   */
+  TURN_MAX_RETRY_BUDGET: z.coerce.number().int().positive().default(3),
+
+  /**
+   * How many times a turn may rebase (transition `stale` → `planning_scene`) when a
+   * concurrent edit changes the base revision. A budget of 2 means 3 total planning
+   * attempts. Each rebase re-reads the latest committed scene and replans from scratch,
+   * so this bounds the worst-case cost of contention.
+   */
+  TURN_MAX_REBASE_ATTEMPTS: z.coerce.number().int().nonnegative().default(2),
 });
 
 /**
