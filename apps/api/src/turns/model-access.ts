@@ -22,6 +22,119 @@
  */
 
 import type { ModelCredentials } from "@nap/shared/ports/llm-provider";
+import type { Env } from "../env.ts";
+
+// ── Multi-model pipeline routing ─────────────────────────────────────────────
+//
+// The turn pipeline routes each stage to a different model via OpenRouter.
+// `getModelConfigForRole` resolves environment variables to concrete model
+// configurations, and `extractCleanJson` normalises model output before parsing.
+//
+// These additions are orthogonal to the BYOK access control below: the access
+// control decides *whose account* pays and *which catalogue* is reachable;
+// the pipeline routing decides which model handles each stage of the turn.
+
+/**
+ * The five pipeline roles a model call can serve.
+ *
+ * Named for what the call *does*, not what model runs it, because a deployment
+ * can swap any of the three models without touching the pipeline logic.
+ */
+export type ModelRole =
+  | "intake_vision"
+  | "scene_planner"
+  | "geometry_builder"
+  | "geometry_fallback"
+  | "vision_validator";
+
+/**
+ * The configuration passed to the OpenRouter API for a model call.
+ *
+ * `responseFormat` is set only for roles that must return JSON — the builder
+ * and the vision validator. The planner (DeepSeek-R1) wraps its output in
+ * `<think>` blocks that are stripped by `extractCleanJson` instead.
+ */
+export type ModelConfig = {
+  model: string;
+  temperature: number;
+  maxTokens: number;
+  responseFormat?: { type: "json_object" };
+};
+
+/**
+ * Resolves a pipeline role to its model configuration using environment variables.
+ *
+ * A pure function of `role` and `env`, so it is testable without a running process
+ * and cannot drift from whatever the environment says at boot.
+ */
+export function getModelConfigForRole(role: ModelRole, env: Env): ModelConfig {
+  switch (role) {
+    case "intake_vision":
+      return {
+        model: env.ORCHESTRATOR_VISION_MODEL,
+        temperature: 0.2,
+        maxTokens: 1500,
+      };
+    case "scene_planner":
+      return {
+        model: env.SCENE_PLANNER_MODEL,
+        temperature: 0.6,
+        maxTokens: 4096,
+      };
+    case "geometry_builder":
+      return {
+        model: env.GEOMETRY_BUILDER_MODEL,
+        temperature: 0.1,
+        maxTokens: 2500,
+        responseFormat: { type: "json_object" },
+      };
+    case "geometry_fallback":
+      return {
+        model: env.FALLBACK_BUILDER_MODEL,
+        temperature: 0.1,
+        maxTokens: 2500,
+        responseFormat: { type: "json_object" },
+      };
+    case "vision_validator":
+      return {
+        model: env.ORCHESTRATOR_VISION_MODEL,
+        temperature: 0.0,
+        maxTokens: 1024,
+        responseFormat: { type: "json_object" },
+      };
+  }
+}
+
+/**
+ * Strips model-specific wrapping from raw LLM output and returns clean JSON text.
+ *
+ * Two models in the pipeline wrap their JSON in non-JSON envelopes:
+ *
+ * - **DeepSeek-R1** emits `<think>…</think>` reasoning blocks before its answer.
+ *   These are valuable for debugging but must be removed before `JSON.parse`.
+ *
+ * - **Qwen 2.5** sometimes wraps JSON in markdown code fences (` ```json … ``` `)
+ *   even when `responseFormat` requests raw JSON.
+ *
+ * This function handles both, in that order, and trims whitespace so the result
+ * is ready for `JSON.parse`. It does not parse — the caller decides what schema
+ * to validate against — so a model that returns plain JSON passes through unchanged.
+ */
+export function extractCleanJson(rawText: string): string {
+  // 1. Strip DeepSeek-R1 reasoning blocks. The regex is non-greedy and handles
+  //    newlines within the block. Multiple blocks are stripped (R1 occasionally
+  //    emits more than one).
+  let cleaned = rawText.replace(/<think>[\s\S]*?<\/think>/g, "");
+
+  // 2. Strip markdown code fences. Handles ```json, ```JSON, and bare ```.
+  //    Only the outermost fence pair is stripped — nested fences in string
+  //    literals are left intact because the regex is non-greedy.
+  cleaned = cleaned.replace(/```(?:json|JSON)?\s*\n?([\s\S]*?)\n?\s*```/g, "$1");
+
+  return cleaned.trim();
+}
+
+// ── BYOK access control ──────────────────────────────────────────────────────
 
 /** What is known about the asker: the key they saved, already opened, or nothing. */
 export type CallerKey = ModelCredentials | null;
@@ -155,3 +268,47 @@ function defaultFor(request: TurnAccessRequest, key: ModelCredentials): string {
     request.defaultModel
   );
 }
+
+import type { LlmCaller } from "./scene-planner.ts";
+
+/**
+ * Creates an LlmCaller function targeting the OpenRouter chat completions endpoint.
+ */
+export function createOpenRouterCaller(options: {
+  apiKey: string;
+  baseUrl?: string;
+  signal?: AbortSignal;
+}): LlmCaller {
+  const baseUrl = options.baseUrl ?? "https://openrouter.ai/api/v1";
+  return async ({ config, systemPrompt, userContent }) => {
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${options.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
+      body: JSON.stringify({
+        model: config.model,
+        temperature: config.temperature,
+        max_tokens: config.maxTokens,
+        ...(config.responseFormat ? { response_format: config.responseFormat } : {}),
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userContent },
+        ],
+      }),
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      throw new Error(`OpenRouter API error ${res.status}: ${errText}`);
+    }
+    const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    const content = data.choices?.[0]?.message?.content;
+    if (content === undefined || content === null) {
+      throw new Error("OpenRouter API returned no content in response");
+    }
+    return content;
+  };
+}
+

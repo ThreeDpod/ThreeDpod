@@ -40,8 +40,90 @@ export const ServerFrameSchema = z.discriminatedUnion("type", [
    * because a client bug should not cost someone their transcript.
    */
   z.strictObject({ type: z.literal("error"), message: z.string().min(1) }),
+
+  // ── Turn pipeline state machine stream events ─────────────────────────────
+  z.strictObject({
+    type: z.literal("turn.state_changed"),
+    turnId: z.string(),
+    from: z.string(),
+    to: z.string(),
+    timestamp: z.string(),
+  }),
+  z.strictObject({
+    type: z.literal("turn.needs_input"),
+    turnId: z.string(),
+    ambiguityReason: z.string(),
+    questions: z.array(z.string()),
+  }),
+  z.strictObject({
+    type: z.literal("turn.plan_ready"),
+    turnId: z.string(),
+    sceneSummary: z.string(),
+    totalSteps: z.number(),
+    steps: z.array(z.strictObject({ stepId: z.string(), goal: z.string() })),
+  }),
+  z.strictObject({
+    type: z.literal("turn.step_started"),
+    turnId: z.string(),
+    stepIndex: z.number(),
+    stepId: z.string(),
+    attempt: z.number(),
+    model: z.string(),
+  }),
+  z.strictObject({
+    type: z.literal("turn.gate_result"),
+    turnId: z.string(),
+    stepId: z.string(),
+    attempt: z.number(),
+    gate: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    passed: z.boolean(),
+    diagnostics: z.string().optional(),
+  }),
+  z.strictObject({
+    type: z.literal("turn.step_committed"),
+    turnId: z.string(),
+    stepIndex: z.number(),
+    stepId: z.string(),
+    newRevision: z.number(),
+    sceneDelta: z.unknown(),
+  }),
+  z.strictObject({
+    type: z.literal("turn.stale_rebase"),
+    turnId: z.string(),
+    expectedRevision: z.number(),
+    actualRevision: z.number(),
+    rebaseAttempt: z.number(),
+  }),
+  z.strictObject({
+    type: z.literal("turn.completed"),
+    turnId: z.string(),
+    finalRevision: z.number(),
+  }),
+  z.strictObject({
+    type: z.literal("turn.failed"),
+    turnId: z.string(),
+    stepId: z.string().optional(),
+    reason: z.string(),
+  }),
 ]);
 export type ServerFrame = z.infer<typeof ServerFrameSchema>;
+
+export type TurnStreamEvent = Extract<
+  ServerFrame,
+  {
+    type:
+      | "turn.state_changed"
+      | "turn.needs_input"
+      | "turn.plan_ready"
+      | "turn.step_started"
+      | "turn.gate_result"
+      | "turn.step_committed"
+      | "turn.stale_rebase"
+      | "turn.completed"
+      | "turn.failed";
+  }
+>;
+
 
 /**
  * Client → server. A union with one member today: the client is a reader, and the only thing

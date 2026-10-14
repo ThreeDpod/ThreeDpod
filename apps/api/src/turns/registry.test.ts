@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { TurnRegistry } from "./registry.ts";
+import { SceneRegistry, TurnRegistry } from "./registry.ts";
+import { emptyScene } from "./deterministic-builder.ts";
 
 const SESSION = "0b7f8f1e-3c2a-4d5b-9e6f-1a2b3c4d5e6f";
 const OTHER = "1c8e9a2f-4d3b-4e6c-8f7a-2b3c4d5e6f70";
+const PROJECT_A = "proj-123";
+const PROJECT_B = "proj-456";
 
 describe("TurnRegistry", () => {
   it("aborts the adopted turn's controller on a matching cancel", () => {
@@ -77,4 +80,88 @@ describe("TurnRegistry", () => {
 
     expect(mine.signal.aborted).toBe(false);
   });
+
+  it("registers, updates, looks up, and unregisters active turns", () => {
+    const registry = new TurnRegistry();
+    const turnId = "turn-001";
+    let clarifiedWith: string[] = [];
+
+    registry.registerTurn({
+      turnId,
+      sessionId: SESSION,
+      userId: "user-123",
+      state: "needs_input",
+      submitClarification: (answers) => {
+        clarifiedWith = answers;
+        return true;
+      },
+    });
+
+    const turn = registry.getTurn(turnId);
+    expect(turn).toBeDefined();
+    expect(turn?.state).toBe("needs_input");
+
+    turn?.submitClarification?.(["answer1", "answer2"]);
+    expect(clarifiedWith).toEqual(["answer1", "answer2"]);
+
+    registry.updateTurnState(turnId, "planning_scene");
+    expect(registry.getTurn(turnId)?.state).toBe("planning_scene");
+
+    registry.unregisterTurn(turnId);
+    expect(registry.getTurn(turnId)).toBeUndefined();
+  });
 });
+
+describe("SceneRegistry", () => {
+  it("defaults revision to 0 for unknown project", () => {
+    const registry = new SceneRegistry();
+    expect(registry.getRevision(PROJECT_A)).toBe(0);
+    const scene = registry.getScene(PROJECT_A);
+    expect(scene.revision).toBe(0);
+    expect(scene.nodes.size).toBe(0);
+  });
+
+  it("commits candidate when working revision matches current revision", () => {
+    const registry = new SceneRegistry();
+    const initialRev = registry.getRevision(PROJECT_A); // 0
+    const candidate = emptyScene(initialRev);
+
+    const result = registry.commitCandidate(PROJECT_A, initialRev, candidate);
+    expect(result.status).toBe("committed");
+    if (result.status === "committed") {
+      expect(result.newRevision).toBe(1);
+      expect(registry.getRevision(PROJECT_A)).toBe(1);
+      expect(registry.getScene(PROJECT_A).revision).toBe(1);
+    }
+  });
+
+  it("rejects commit with stale_base when revision has diverged", () => {
+    const registry = new SceneRegistry();
+    const initialRev = registry.getRevision(PROJECT_A); // 0
+
+    // Another turn commits first, advancing revision to 1
+    const firstCandidate = emptyScene(initialRev);
+    const firstResult = registry.commitCandidate(PROJECT_A, initialRev, firstCandidate);
+    expect(firstResult.status).toBe("committed");
+
+    // Second turn tries to commit against original base revision 0
+    const secondCandidate = emptyScene(initialRev);
+    const secondResult = registry.commitCandidate(PROJECT_A, initialRev, secondCandidate);
+
+    expect(secondResult.status).toBe("stale_base");
+    if (secondResult.status === "stale_base") {
+      expect(secondResult.currentRevision).toBe(1);
+    }
+    // Scene revision remains 1
+    expect(registry.getRevision(PROJECT_A)).toBe(1);
+  });
+
+  it("isolates revisions across different projects", () => {
+    const registry = new SceneRegistry();
+    registry.commitCandidate(PROJECT_A, 0, emptyScene(0));
+
+    expect(registry.getRevision(PROJECT_A)).toBe(1);
+    expect(registry.getRevision(PROJECT_B)).toBe(0);
+  });
+});
+

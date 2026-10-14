@@ -199,6 +199,84 @@ describe("POST /sessions/:sessionId/turns/cancel", () => {
   });
 });
 
+describe("POST /api/turns/:turnId/clarify", () => {
+  it("clarifies a turn in needs_input state and transitions to planning_scene", async () => {
+    const { app: hono, registry } = app(new InMemoryTurnQueue());
+    const turnId = "turn-clarify-1";
+    let submittedAnswers: string[] = [];
+
+    registry.registerTurn({
+      turnId,
+      sessionId: SESSION,
+      userId: FAKE_OWNER,
+      state: "needs_input",
+      submitClarification: (answers) => {
+        submittedAnswers = answers;
+        return true;
+      },
+    });
+
+    const res = await post(hono, `/api/turns/${turnId}/clarify`, {
+      answers: ["Use 1.2m width by 0.6m depth", "Proportional chair scaling"],
+    });
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ accepted: true, state: "planning_scene" });
+    expect(submittedAnswers).toEqual(["Use 1.2m width by 0.6m depth", "Proportional chair scaling"]);
+    expect(registry.getTurn(turnId)?.state).toBe("planning_scene");
+  });
+
+  it("404s when the turn does not exist", async () => {
+    const { app: hono } = app(new InMemoryTurnQueue());
+    const res = await post(hono, `/api/turns/nonexistent-turn/clarify`, { answers: ["yes"] });
+    expect(res.status).toBe(404);
+  });
+
+  it("404s when the turn belongs to another user", async () => {
+    const { app: hono, registry } = app(new InMemoryTurnQueue());
+    const turnId = "turn-stranger";
+    registry.registerTurn({
+      turnId,
+      sessionId: SESSION,
+      userId: "someone-else",
+      state: "needs_input",
+    });
+
+    const res = await post(hono, `/api/turns/${turnId}/clarify`, { answers: ["yes"] });
+    expect(res.status).toBe(404);
+  });
+
+  it("409s when the turn is not awaiting clarification", async () => {
+    const { app: hono, registry } = app(new InMemoryTurnQueue());
+    const turnId = "turn-building";
+    registry.registerTurn({
+      turnId,
+      sessionId: SESSION,
+      userId: FAKE_OWNER,
+      state: "building",
+    });
+
+    const res = await post(hono, `/api/turns/${turnId}/clarify`, { answers: ["yes"] });
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toMatchObject({ state: "building" });
+  });
+
+  it("400s when answers is missing or invalid in request body", async () => {
+    const { app: hono, registry } = app(new InMemoryTurnQueue());
+    const turnId = "turn-bad-body";
+    registry.registerTurn({
+      turnId,
+      sessionId: SESSION,
+      userId: FAKE_OWNER,
+      state: "needs_input",
+    });
+
+    const res = await post(hono, `/api/turns/${turnId}/clarify`, { notAnswers: true });
+    expect(res.status).toBe(400);
+  });
+});
+
+
 describe("when the app is built without a turn queue", () => {
   it("has no turn routes at all", async () => {
     const unwired = createApp({

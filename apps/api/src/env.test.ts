@@ -434,3 +434,39 @@ describe("NAP_ALLOWED_MODELS", () => {
     expect(() => parseEnv({ ...VALID, NAP_ALLOWED_MODELS: " , " })).toThrow(/NAP_ALLOWED_MODELS/);
   });
 });
+
+describe("multi-model pipeline configuration", () => {
+  it("defaults role-specific models and pipeline parameters", () => {
+    const env = parseEnv(REQUIRED);
+
+    expect(env.OPENROUTER_BASE_URL).toBe("https://openrouter.ai/api/v1");
+    expect(env.ORCHESTRATOR_VISION_MODEL).toBe("openai/gpt-5.6-luna");
+    expect(env.SCENE_PLANNER_MODEL).toBe("deepseek/deepseek-r1");
+    expect(env.GEOMETRY_BUILDER_MODEL).toBe("qwen/qwen-2.5-coder-32b-instruct");
+    expect(env.FALLBACK_BUILDER_MODEL).toBe("openai/gpt-5.6-luna");
+    expect(env.TURN_MAX_RETRY_BUDGET).toBe(3);
+    expect(env.TURN_MAX_REBASE_ATTEMPTS).toBe(2);
+  });
+
+  it("allows overriding multi-model pipeline variables", () => {
+    const env = parseEnv({
+      ...REQUIRED,
+      OPENROUTER_BASE_URL: "https://custom-router.example.com/api/v1",
+      ORCHESTRATOR_VISION_MODEL: "custom/vision-model",
+      SCENE_PLANNER_MODEL: "custom/planner-model",
+      GEOMETRY_BUILDER_MODEL: "custom/builder-model",
+      FALLBACK_BUILDER_MODEL: "custom/fallback-model",
+      TURN_MAX_RETRY_BUDGET: "5",
+      TURN_MAX_REBASE_ATTEMPTS: "4",
+    });
+
+    expect(env.OPENROUTER_BASE_URL).toBe("https://custom-router.example.com/api/v1");
+    expect(env.ORCHESTRATOR_VISION_MODEL).toBe("custom/vision-model");
+    expect(env.SCENE_PLANNER_MODEL).toBe("custom/planner-model");
+    expect(env.GEOMETRY_BUILDER_MODEL).toBe("custom/builder-model");
+    expect(env.FALLBACK_BUILDER_MODEL).toBe("custom/fallback-model");
+    expect(env.TURN_MAX_RETRY_BUDGET).toBe(5);
+    expect(env.TURN_MAX_REBASE_ATTEMPTS).toBe(4);
+  });
+});
+

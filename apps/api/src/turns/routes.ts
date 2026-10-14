@@ -122,6 +122,10 @@ const TurnBodySchema = z.object({
   model: z.string().min(1).optional(),
 });
 
+const ClarifyBodySchema = z.object({
+  answers: z.array(z.string()),
+});
+
 export function registerTurnRoutes(
   app: Hono<{ Variables: AuthVariables }>,
   deps: TurnRouteDeps,
@@ -217,6 +221,31 @@ export function registerTurnRoutes(
     deps.registry.cancel(sessionId);
 
     return c.json({ cancelled: true }, 202);
+  });
+
+  app.post("/api/turns/:turnId/clarify", async (c) => {
+    const turnId = c.req.param("turnId");
+    const userId = c.get("userId");
+
+    const turn = deps.registry.getTurn(turnId);
+    if (turn === undefined || turn.userId !== userId) {
+      return c.json({ error: "turn not found" }, 404);
+    }
+
+    if (turn.state !== "needs_input") {
+      return c.json({ error: "turn is not awaiting clarification", state: turn.state }, 409);
+    }
+
+    const raw = await readJson(c.req.raw);
+    const body = ClarifyBodySchema.safeParse(raw);
+    if (!body.success) {
+      return c.json({ error: body.error.issues.map((issue) => issue.message).join("; ") }, 400);
+    }
+
+    turn.submitClarification?.(body.data.answers);
+    deps.registry.updateTurnState(turnId, "planning_scene");
+
+    return c.json({ accepted: true, state: "planning_scene" }, 200);
   });
 }
 

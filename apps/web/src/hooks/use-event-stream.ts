@@ -41,11 +41,14 @@ export const BACKOFF = { initialMs: 500, maxMs: 10_000, factor: 2 } as const;
 
 export type StreamStatus = "idle" | "connecting" | "open" | "reconnecting";
 
+import type { TurnStreamEvent } from "@nap/shared/ws-protocol";
+
 export type EventStreamOptions = {
   /** No session means no connection — what the shell renders before one exists. */
   sessionId: string | undefined;
   baseUrl?: string;
   createSocket?: CreateSocket;
+  onTurnEvent?: (event: TurnStreamEvent) => void;
 };
 
 export type EventStream = {
@@ -81,6 +84,8 @@ export function useEventStream(options: EventStreamOptions): EventStream {
   const lastSeqRef = useRef(0);
   const createSocketRef = useRef(createSocket);
   createSocketRef.current = createSocket;
+  const onTurnEventRef = useRef(options.onTurnEvent);
+  onTurnEventRef.current = options.onTurnEvent;
 
   useEffect(() => {
     if (sessionId === undefined) {
@@ -134,6 +139,10 @@ export function useEventStream(options: EventStreamOptions): EventStream {
         // An `error` frame is the server rejecting something this client sent. Nothing here
         // sends anything but pongs, so there is nothing to retry — dropping it keeps a server
         // complaint from tearing down a working stream.
+        if (frame.type.startsWith("turn.")) {
+          onTurnEventRef.current?.(frame as TurnStreamEvent);
+          return;
+        }
         if (frame.type !== "event") return;
 
         const event = frame.event;
